@@ -5,10 +5,11 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="postgresdb3",
-    version="0.1.0",
+    version="0.2.0",
     packages=find_packages(),
     install_requires=[
-        "psycopg2>=2.9"
+        "psycopg2>=2.9",
+        "asyncpg>=0.31.0"
     ],
     author="Abdulbosit Alijonov",
     description="Python uchun oddiy PostgreSQL wrapper",

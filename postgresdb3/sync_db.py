@@ -147,3 +147,43 @@ class PostgresDB:
         """
         sql = f"DELETE FROM {table} WHERE {where_column} = %s"
         return self.manager(sql, (where_value,), commit=True)
+
+    def list_tables(self, schema="public"):
+        """
+        Bazadagi mavjud jadvallar ro'yxatini qaytaradi.
+
+        schema: str — schema nomi (standart: public)
+        """
+        sql = """
+              SELECT table_name
+              FROM information_schema.tables
+              WHERE table_schema = %s
+              ORDER BY table_name; \
+              """
+        return self.manager(sql, (schema,), fetchall=True)
+
+    def describe_table(self, table, schema="public"):
+        """
+        Jadval ustunlari haqida ma'lumot beradi.
+        """
+        sql = """
+              SELECT column_name,
+                     data_type,
+                     is_nullable,
+                     column_default
+              FROM information_schema.columns
+              WHERE table_schema = %s
+                AND table_name = %s
+              ORDER BY ordinal_position; \
+              """
+        return self.manager(sql, (schema, table), fetchall=True)
+
+    def alter(self, table, action):
+        """
+        Universal ALTER TABLE metodi.
+
+        table: str — jadval nomi
+        action: str — ALTER TABLE dan keyingi qism
+        """
+        sql = f"ALTER TABLE {table} {action}"
+        return self.manager(sql, commit=True)
