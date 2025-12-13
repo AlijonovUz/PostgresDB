@@ -1,14 +1,18 @@
 # PostgresDB
 
+![PyPI Version](https://img.shields.io/pypi/v/nameuz)
+![Python Version](https://img.shields.io/pypi/pyversions/nameuz)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Oddiy va qulay Python wrapper PostgreSQL bazasi bilan ishlash uchun.
 
 ## O'rnatish
 
 ``` bash
-    pip install postgresdb3
+pip install postgresdb3
 ```
 
-## Foydalanish
+## Foydalanish (Sync)
 
 ``` python
 from postgresdb3 import PostgresDB
@@ -18,8 +22,8 @@ db = PostgresDB(
     database="mydb",
     user="postgres",
     password="mypassword",
-    host="localhost",
-    port=5432
+    host="localhost", # ixtiyoriy
+    port=5432 # ixtiyoriy
 )
 
 # Jadval yaratish
@@ -52,6 +56,61 @@ db.delete("users", "name", "Ali")
 
 # Jadvalni o'chirish
 db.drop("users")
+```
+
+## Foydalanish (Async)
+
+```python
+import asyncio
+from postgresdb3 import AsyncPostgresDB
+
+async def main():
+    # Bazaga ulanish
+    db = AsyncPostgresDB(
+        database="mydb",
+        user="postgres",
+        password="mypassword",
+        host="localhost", # ixtiyoriy
+        port=5432 # ixtiyoriy
+    )
+
+    # Jadval yaratish
+    await db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
+
+    # Ma'lumot qo'shish
+    await db.insert("users", "name, age", ["Ali", 25])
+    await db.insert("users", "name, age", ["Vali", 30])
+
+    # Barcha ma'lumotlarni olish
+    users = await db.select("users")
+    print("Barcha foydalanuvchilar:", users)
+
+    # Bitta qatorni olish
+    user = await db.select("users", where=("name=$1", ["Ali"]), fetchone=True)
+    print("Foydalanuvchi Ali:", user)
+
+    # Shart bilan ma'lumot olish
+    adults = await db.select("users", where=("age > $1", [18]))
+    print("Kattalar:", adults)
+
+    # Bir nechta shart
+    specific_users = await db.select("users", where=("age > $1 AND name = $2", [18, "Ali"]))
+    print("Maxsus foydalanuvchi:", specific_users)
+
+    # Jadvaldagi ma'lumotni yangilash
+    await db.update("users", "age", 26, "name", "Ali")
+
+    # Ma'lumotni o'chirish
+    await db.delete("users", "name", "Ali")
+
+    # Jadvalni o'chirish
+    await db.drop("users")
+
+    # Connection poolni yopish
+    await db.close_pool()
+
+# Asinxron loop ishga tushirish
+asyncio.run(main())
 ```
 
 ## Parametrlar va metodlar
