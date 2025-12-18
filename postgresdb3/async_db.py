@@ -81,22 +81,30 @@ class AsyncPostgresDB:
         """
         await self._manager(f"CREATE TABLE IF NOT EXISTS {table} ({columns})", commit=True)
 
-    async def drop(self, table: str) -> None:
+    async def drop(self, table: str, cascade: bool = False) -> None:
         """
         Jadvalni o‘chiradi (agar mavjud bo‘lsa).
 
         Args:
             table (str): Jadval nomi.
+            cascade (bool): Agar True bo‘lsa, jadval bilan bog‘liq barcha obyektlar ham o‘chiradi. Default: True
         """
-        await self._manager(f"DROP TABLE IF EXISTS {table} CASCADE", commit=True)
+        sql = f"DROP TABLE IF EXISTS {table}"
+        if cascade:
+            sql += " CASCADE"
+
+        await self._manager(sql, commit=True)
 
     async def select(
-            self, table: str, columns: str = "*",
+            self,
+            table: str,
+            columns: str = "*",
             where: Optional[List[Any]] = None,
             join: Optional[List[tuple]] = None,
             group_by: Optional[str] = None,
             order_by: Optional[str] = None,
             limit: Optional[int] = None,
+            offset: Optional[int] = None,
             fetchone: bool = False
     ) -> Any:
         """
@@ -110,6 +118,7 @@ class AsyncPostgresDB:
             group_by (Optional[str]): GROUP BY ustuni.
             order_by (Optional[str]): ORDER BY qoidasi.
             limit (Optional[int]): LIMIT qiymati.
+            offset (Optional[int]): OFFSET qiymati.
             fetchone (bool): True bo‘lsa faqat bitta qator qaytaradi.
 
         Returns:
@@ -137,7 +146,11 @@ class AsyncPostgresDB:
             sql += f" LIMIT $%d" % (len(params) + 1)
             params.append(limit)
 
-        return await self._manager(sql, *params, fetchone=fetchone, fetchall=not fetchone)
+        if offset is not None:
+            sql += " OFFSET $%d" % (len(params) + 1)
+            params.append(offset)
+
+        return await self._manager(sql, params, fetchone=fetchone, fetchall=not fetchone)
 
     async def insert(self, table: str, columns: str, values: List[Any]) -> None:
         """
@@ -233,7 +246,7 @@ class AsyncPostgresDB:
               SELECT table_name
               FROM information_schema.tables
               WHERE table_schema = $1
-              ORDER BY table_name \
+              ORDER BY table_name;
               """
         result = await self._manager(sql, schema, fetchall=True)
         return [r["table_name"] for r in result]
@@ -254,7 +267,7 @@ class AsyncPostgresDB:
               FROM information_schema.columns
               WHERE table_schema = $1
                 AND table_name = $2
-              ORDER BY ordinal_position \
+              ORDER BY ordinal_position; \
               """
         return await self._manager(sql, schema, table, fetchall=True)
 

@@ -14,7 +14,7 @@ pip install postgresdb3
 
 ## Foydalanish (Sync)
 
-``` python
+```python
 from postgresdb3 import PostgresDB
 
 # Bazaga ulanish
@@ -22,15 +22,22 @@ db = PostgresDB(
     database="mydb",
     user="postgres",
     password="mypassword",
-    host="localhost", # ixtiyoriy
-    port=5432 # ixtiyoriy
+    host="localhost",  # ixtiyoriy
+    port=5432          # ixtiyoriy
 )
 
 # Jadval yaratish
 db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
 
-# Ma'lumot qo'shish
+# Bitta qator qo'shish
 db.insert("users", "name, age", ("Ali", 25))
+
+# Bir nechta qator qo'shish
+db.insert_many(
+    "users",
+    "name, age",
+    [("Vali", 30), ("Gulnoza", 22), ("Hasan", 28)]
+)
 
 # Ma'lumotlarni olish
 users = db.select("users")
@@ -44,9 +51,13 @@ print(user)
 adults = db.select("users", where=("age > %s", [18]))
 print(adults)
 
-# Bir nechta shart
+# Bir nechta shart bilan
 specific_users = db.select("users", where=("age > %s AND name = %s", [18, "Ali"]))
 print(specific_users)
+
+# Faqat 2 ta qatorni olish
+users = db.select("users", fetchmany=2)
+print(users)
 
 # Jadvaldagi ma'lumotni yangilash
 db.update("users", "age", 26, "name", "Ali")
@@ -55,7 +66,14 @@ db.update("users", "age", 26, "name", "Ali")
 db.delete("users", "name", "Ali")
 
 # Jadvalni o'chirish
-db.drop("users")
+db.drop("users", cascade=False)
+
+# To‘g‘ridan-to‘g‘ri SQL bajarish (raw)
+result = db.raw("SELECT name, age FROM users WHERE age > %s", [25], fetchall=True)
+print(result)
+
+# Connectionni yopish
+db.close()
 ```
 
 ## Foydalanish (Async)
@@ -65,21 +83,26 @@ import asyncio
 from postgresdb3 import AsyncPostgresDB
 
 async def main():
-    # Bazaga ulanish
     db = AsyncPostgresDB(
         database="mydb",
         user="postgres",
         password="mypassword",
-        host="localhost", # ixtiyoriy
-        port=5432 # ixtiyoriy
+        host="localhost",
+        port=5432
     )
 
     # Jadval yaratish
     await db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
 
-    # Ma'lumot qo'shish
+    # Bitta qator qo'shish
     await db.insert("users", "name, age", ["Ali", 25])
-    await db.insert("users", "name, age", ["Vali", 30])
+
+    # Bir nechta qator qo'shish
+    await db.insert_many(
+        "users",
+        "name, age",
+        [["Vali", 30], ["Gulnoza", 22], ["Hasan", 28]]
+    )
 
     # Barcha ma'lumotlarni olish
     users = await db.select("users")
@@ -93,10 +116,14 @@ async def main():
     adults = await db.select("users", where=("age > $1", [18]))
     print("Kattalar:", adults)
 
-    # Bir nechta shart
+    # Bir nechta shart bilan
     specific_users = await db.select("users", where=("age > $1 AND name = $2", [18, "Ali"]))
     print("Maxsus foydalanuvchi:", specific_users)
-
+    
+    # Faqat 2 ta qatorni olish
+    users = await db.select("users", fetchmany=2)
+    print(users)
+    
     # Jadvaldagi ma'lumotni yangilash
     await db.update("users", "age", 26, "name", "Ali")
 
@@ -104,12 +131,15 @@ async def main():
     await db.delete("users", "name", "Ali")
 
     # Jadvalni o'chirish
-    await db.drop("users")
+    await db.drop("users", cascade=False)
+
+    # To‘g‘ridan-to‘g‘ri SQL bajarish (raw)
+    result = await db.raw("SELECT name, age FROM users WHERE age > $1", [25], fetchall=True)
+    print("Raw query result:", result)
 
     # Connection poolni yopish
     await db.close_pool()
 
-# Asinxron loop ishga tushirish
 asyncio.run(main())
 ```
 
@@ -121,9 +151,11 @@ asyncio.run(main())
 **create(table, columns)** --- jadval yaratish, `columns` SQL
 sintaksisida.
 
-**drop(table)** --- jadvalni o'chirish.
+**drop(table, cascade=False)** --- jadvalni o'chirish.
 
 **insert(table, columns, values)** --- ma'lumot qo'shish.
+
+**insert_many(table, columns, values_list)** --- bir nechta qator qo‘shish
 
 **select(table, columns="\*", where=None, join=None, group_by=None,
 order_by=None, limit=None, fetchone=False)** --- ma'lumotlarni olish.
@@ -146,19 +178,16 @@ ma'lumotni yangilash.
 
 **delete(table, where_column, where_value)** --- ma'lumotni o'chirish.
 
-**manager(sql, params=None, commit=False, fetchall=False,
-fetchone=False)** --- barcha SQL amallarni bajaruvchi yagona metod.
-
 ## Qo‘shimcha
 
-`%s` bilan parametrizatsiya qilish xavfsiz va SQL injection'dan himoya qiladi.
+`%s`,`$1` bilan parametrizatsiya qilish xavfsiz va SQL injection'dan himoya qiladi.
 
-`where` va `join` `list` yoki `tuple` yordamida murakkab so‘rovlar yozish mumkin.
+`where` va `join` yordamida murakkab so‘rovlar yozish mumkin.
 
 `limit` va `order_by` parametrlaridan foydalanib ma'lumotlarni tartiblash va cheklash oson.
 
 `commit=True` bo‘lgan amallar darhol bazaga yoziladi, select() esa hech qachon o‘zgartirish kiritmaydi.
 
-`manager()` — barcha SQL buyruqlarini bajaruvchi yagona metod bo‘lib, kerak bo‘lganda to‘g‘ridan‑to‘g‘ri SQL yozish imkonini beradi.
+`raw()` — barcha SQL buyruqlarini bajaruvchi yagona metod bo‘lib, kerak bo‘lganda to‘g‘ridan‑to‘g‘ri SQL yozish imkonini beradi.
 
 PostgreSQL bilan ishlash uchun `psycopg2` kutubxonasi talab qilinadi.

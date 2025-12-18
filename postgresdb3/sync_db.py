@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 import psycopg2
 
 
@@ -22,7 +22,7 @@ class PostgresDB:
     def _manager(
             self,
             sql: str,
-            params: list | tuple | None = None,
+            params: Optional[list | tuple] = None,
             *,
             commit: bool = False,
             many: bool = False,
@@ -85,6 +85,8 @@ class PostgresDB:
         - Tashqaridan bevosita chaqirish tavsiya etilmaydi.
         """
 
+        if not sql or not sql.strip():
+            raise ValueError("SQL query cannot be empty")
         if fetchone and fetchall:
             raise ValueError("fetchone and fetchall cannot be True at the same time")
         if many and (fetchone or fetchall or fetchmany):
@@ -111,6 +113,12 @@ class PostgresDB:
         return result
 
     def close(self) -> None:
+        """
+           Faol bazaga ulanishni yopadi.
+
+           Bu metod chaqirilgandan so‘ng, connection obyekti ishlatilmaydi.
+           Ulanishni yopishdan oldin, har qanday kutilayotgan tranzaksiyalarni commit qilganingizga ishonch hosil qiling.
+        """
         self.connection.close()
 
     def raw(
@@ -164,8 +172,6 @@ class PostgresDB:
         ------
         >>> db.raw("SELECT * FROM users WHERE age > %s", (18,), fetchall=True)
         """
-        if fetchone and fetchall:
-            raise ValueError("fetchone va fetchall bir vaqtda True bo‘la olmaydi")
 
         return self._manager(
             sql,
@@ -185,11 +191,17 @@ class PostgresDB:
         sql = f"CREATE TABLE IF NOT EXISTS {table} ({columns})"
         self._manager(sql, commit=True)
 
-    def drop(self, table: str) -> None:
+    def drop(self, table: str, cascade: bool = False) -> None:
         """
-        table: str - o'chiriladigan jadval nomi
+        Jadvalni o'chiradi.
+
+        Parametrlar:
+            table (str): O'chiriladigan jadval nomi
+            cascade (bool): Agar True bo'lsa, jadval bilan bog'liq barcha obyektlar ham o'chiriladi. Default: True
         """
-        sql = f"DROP TABLE IF EXISTS {table} CASCADE"
+        sql = f"DROP TABLE IF EXISTS {table}"
+        if cascade:
+            sql += " CASCADE"
         self._manager(sql, commit=True)
 
     def select(
@@ -201,7 +213,9 @@ class PostgresDB:
             group_by: str | None = None,
             order_by: str | None = None,
             limit: int | None = None,
-            fetchone: bool = False
+            offset: int | None = None,
+            fetchone: bool = False,
+            fetchmany: int | None = None
     ) -> Any:
         """
         table: str — asosiy jadval
@@ -211,6 +225,9 @@ class PostgresDB:
         group_by: str | None — "age"
         order_by: str | None — "age DESC"
         limit: int | None
+        offset: int | None
+        fetchone: bool
+        fetchmany: int | None
         """
 
         sql = f"SELECT {columns} FROM {table}"
@@ -231,13 +248,20 @@ class PostgresDB:
         if order_by:
             sql += f" ORDER BY {order_by}"
 
-        if limit:
+        if limit is not None:
             sql += f" LIMIT %s"
             params.append(limit)
 
+        if offset is not None:
+            sql += " OFFSET %s"
+            params.append(offset)
+
         if fetchone:
             return self._manager(sql, params, fetchone=True)
-        return self._manager(sql, params, fetchall=True)
+        elif fetchmany is not None:
+            return self._manager(sql, params, fetchmany=fetchmany)
+        else:
+            return self._manager(sql, params, fetchall=True)
 
     def insert(self, table: str, columns: str, values: tuple | list) -> None:
         """
@@ -313,7 +337,7 @@ class PostgresDB:
               SELECT table_name
               FROM information_schema.tables
               WHERE table_schema = %s
-              ORDER BY table_name; \
+              ORDER BY table_name; 
               """
         return self._manager(sql, (schema,), fetchall=True)
 
@@ -329,7 +353,7 @@ class PostgresDB:
               FROM information_schema.columns
               WHERE table_schema = %s
                 AND table_name = %s
-              ORDER BY ordinal_position; \
+              ORDER BY ordinal_position; 
               """
         return self._manager(sql, (schema, table), fetchall=True)
 
