@@ -180,11 +180,11 @@ ma'lumotni yangilash.
 
 ## Qo‘shimcha
 
-`%s`,`$1` bilan parametrizatsiya qilish xavfsiz va SQL injection'dan himoya qiladi.
+`%s` va `$1` bilan parametrizatsiya qilish xavfsiz va SQL injection'dan himoya qiladi.
 
 `where` va `join` yordamida murakkab so‘rovlar yozish mumkin.
 
-`limit` va `order_by` parametrlaridan foydalanib ma'lumotlarni tartiblash va cheklash oson.
+`limit`, `offset` va `order_by` parametrlaridan foydalanib ma'lumotlarni tartiblash va cheklash oson.
 
 `commit=True` bo‘lgan amallar darhol bazaga yoziladi, select() esa hech qachon o‘zgartirish kiritmaydi.
 
