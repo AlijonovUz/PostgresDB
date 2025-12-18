@@ -189,5 +189,3 @@ ma'lumotni yangilash.
 `commit=True` bo‘lgan amallar darhol bazaga yoziladi, select() esa hech qachon o‘zgartirish kiritmaydi.
 
 `raw()` — barcha SQL buyruqlarini bajaruvchi yagona metod bo‘lib, kerak bo‘lganda to‘g‘ridan‑to‘g‘ri SQL yozish imkonini beradi.
-
-PostgreSQL bilan ishlash uchun `psycopg2` kutubxonasi talab qilinadi.

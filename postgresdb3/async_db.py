@@ -150,7 +150,7 @@ class AsyncPostgresDB:
             sql += " OFFSET $%d" % (len(params) + 1)
             params.append(offset)
 
-        return await self._manager(sql, params, fetchone=fetchone, fetchall=not fetchone)
+        return await self._manager(sql, *params, fetchone=fetchone, fetchall=not fetchone)
 
     async def insert(self, table: str, columns: str, values: List[Any]) -> None:
         """
