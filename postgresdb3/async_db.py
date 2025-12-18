@@ -11,7 +11,7 @@ class AsyncPostgresDB:
     Aiogram kabi async frameworklar bilan to‘g‘ridan-to‘g‘ri ishlash uchun mos.
     """
 
-    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432):
+    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432) -> None:
         """
         PostgreSQL bazasiga ulanishni tayyorlaydi.
 
@@ -29,7 +29,7 @@ class AsyncPostgresDB:
         self.port = port
         self.pool: Optional[asyncpg.pool.Pool] = None
 
-    async def manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False):
+    async def _manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False) -> Any:
         """
         Markaziy metod: barcha SQL so‘rovlarni bajaradi.
 
@@ -63,7 +63,7 @@ class AsyncPostgresDB:
             if fetchall:
                 return await conn.fetch(sql, *params)
 
-    async def close_pool(self):
+    async def close_pool(self) -> None:
         """
         Connection poolni yopadi.
         """
@@ -71,7 +71,7 @@ class AsyncPostgresDB:
             await self.pool.close()
             self.pool = None
 
-    async def create(self, table: str, columns: str):
+    async def create(self, table: str, columns: str) -> None:
         """
         Jadval yaratadi (agar mavjud bo‘lsa o‘tkazib yuboradi).
 
@@ -79,26 +79,26 @@ class AsyncPostgresDB:
             table (str): Jadval nomi.
             columns (str): Ustunlar va turlari, misol: "id SERIAL PRIMARY KEY, name TEXT".
         """
-        await self.manager(f"CREATE TABLE IF NOT EXISTS {table} ({columns})", commit=True)
+        await self._manager(f"CREATE TABLE IF NOT EXISTS {table} ({columns})", commit=True)
 
-    async def drop(self, table: str):
+    async def drop(self, table: str) -> None:
         """
         Jadvalni o‘chiradi (agar mavjud bo‘lsa).
 
         Args:
             table (str): Jadval nomi.
         """
-        await self.manager(f"DROP TABLE IF EXISTS {table} CASCADE", commit=True)
+        await self._manager(f"DROP TABLE IF EXISTS {table} CASCADE", commit=True)
 
     async def select(
-        self, table: str, columns: str = "*",
-        where: Optional[List[Any]] = None,
-        join: Optional[List[tuple]] = None,
-        group_by: Optional[str] = None,
-        order_by: Optional[str] = None,
-        limit: Optional[int] = None,
-        fetchone: bool = False
-    ):
+            self, table: str, columns: str = "*",
+            where: Optional[List[Any]] = None,
+            join: Optional[List[tuple]] = None,
+            group_by: Optional[str] = None,
+            order_by: Optional[str] = None,
+            limit: Optional[int] = None,
+            fetchone: bool = False
+    ) -> Any:
         """
         Jadvaldan ma'lumotlarni tanlash.
 
@@ -137,9 +137,9 @@ class AsyncPostgresDB:
             sql += f" LIMIT $%d" % (len(params) + 1)
             params.append(limit)
 
-        return await self.manager(sql, *params, fetchone=fetchone, fetchall=not fetchone)
+        return await self._manager(sql, *params, fetchone=fetchone, fetchall=not fetchone)
 
-    async def insert(self, table: str, columns: str, values: List[Any]):
+    async def insert(self, table: str, columns: str, values: List[Any]) -> None:
         """
         Jadvalga yangi qator qo‘shadi.
 
@@ -148,11 +148,52 @@ class AsyncPostgresDB:
             columns (str): Ustunlar nomi, misol: "name, age".
             values (List[Any]): Qiymatlar, misol: ["Ali", 25].
         """
-        placeholders = ", ".join(f"${i+1}" for i in range(len(values)))
+        placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        await self.manager(sql, *values, commit=True)
+        await self._manager(sql, *values, commit=True)
 
-    async def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any):
+    async def insert_many(self, table: str, columns: str, values_list: List[List[Any]]) -> None:
+        """
+        Jadvalga bir nechta qator qo‘shish (bulk insert).
+
+        Args:
+            table (str): Jadval nomi.
+            columns (str): Ustunlar nomi, misol: "name, age".
+            values_list (List[List[Any]]): Qiymatlar ro‘yxati, misol: [["Ali", 25], ["Vali", 30]].
+
+        Raises:
+            ValueError: Agar `values_list` bo‘sh bo‘lsa.
+
+        Notes:
+            - `asyncpg` kutubxonasida har bir parametr uchun unikal `$n` indekslari kerak,
+              shuning uchun har bir qator uchun ketma-ket `$1, $2, ...` ishlatiladi.
+            - Metod barcha qatorlarni bir so‘rovda qo‘shadi.
+            - `fetchmany` kerak emas, chunki bu insert operatsiyasi natija qaytarmaydi.
+
+        Example:
+            await db.insert_many(
+                "users",
+                "name, age",
+                [["Ali", 25], ["Vali", 30], ["Guli", 22]]
+            )
+        """
+        if not values_list:
+            raise ValueError("values_list bo'sh bo'lishi mumkin emas")
+
+        placeholders_list = []
+        flat_values = []
+        counter = 1
+
+        for values in values_list:
+            placeholders = ", ".join(f"${i}" for i in range(counter, counter + len(values)))
+            placeholders_list.append(f"({placeholders})")
+            flat_values.extend(values)
+            counter += len(values)
+
+        sql = f"INSERT INTO {table} ({columns}) VALUES {', '.join(placeholders_list)}"
+        await self._manager(sql, *flat_values, commit=True)
+
+    async def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any) -> None:
         """
         Jadvaldagi qatorni yangilaydi.
 
@@ -164,9 +205,9 @@ class AsyncPostgresDB:
             where_value (Any): Filtrlash qiymati.
         """
         sql = f"UPDATE {table} SET {set_column} = $1 WHERE {where_column} = $2"
-        await self.manager(sql, set_value, where_value, commit=True)
+        await self._manager(sql, set_value, where_value, commit=True)
 
-    async def delete(self, table: str, where_column: str, where_value: Any):
+    async def delete(self, table: str, where_column: str, where_value: Any) -> None:
         """
         Jadvaldan qator o‘chiradi.
 
@@ -176,7 +217,7 @@ class AsyncPostgresDB:
             where_value (Any): Filtrlash qiymati.
         """
         sql = f"DELETE FROM {table} WHERE {where_column} = $1"
-        await self.manager(sql, where_value, commit=True)
+        await self._manager(sql, where_value, commit=True)
 
     async def list_tables(self, schema: str = "public") -> List[str]:
         """
@@ -189,15 +230,15 @@ class AsyncPostgresDB:
             List[str]: Jadval nomlari
         """
         sql = """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = $1
-            ORDER BY table_name
-        """
-        result = await self.manager(sql, schema, fetchall=True)
+              SELECT table_name
+              FROM information_schema.tables
+              WHERE table_schema = $1
+              ORDER BY table_name \
+              """
+        result = await self._manager(sql, schema, fetchall=True)
         return [r["table_name"] for r in result]
 
-    async def describe_table(self, table: str, schema: str = "public"):
+    async def describe_table(self, table: str, schema: str = "public") -> List[str]:
         """
         Jadval ustunlari haqida ma'lumot beradi.
 
@@ -209,14 +250,15 @@ class AsyncPostgresDB:
             list[asyncpg.Record]: Har bir ustun bo‘yicha ma’lumot
         """
         sql = """
-            SELECT column_name, data_type, is_nullable, column_default
-            FROM information_schema.columns
-            WHERE table_schema = $1 AND table_name = $2
-            ORDER BY ordinal_position
-        """
-        return await self.manager(sql, schema, table, fetchall=True)
+              SELECT column_name, data_type, is_nullable, column_default
+              FROM information_schema.columns
+              WHERE table_schema = $1
+                AND table_name = $2
+              ORDER BY ordinal_position \
+              """
+        return await self._manager(sql, schema, table, fetchall=True)
 
-    async def alter(self, table: str, action: str):
+    async def alter(self, table: str, action: str) -> None:
         """
         Jadval strukturasi o‘zgartirish (ALTER TABLE).
 
@@ -225,4 +267,4 @@ class AsyncPostgresDB:
             action (str): ALTER TABLE dan keyingi SQL qismi, misol: "ADD COLUMN age INT".
         """
         sql = f"ALTER TABLE {table} {action}"
-        await self.manager(sql, commit=True)
+        await self._manager(sql, commit=True)

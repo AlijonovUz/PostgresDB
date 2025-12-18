@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="postgresdb3",
-    version="0.2.3",
+    version="0.3.0",
     packages=find_packages(),
     install_requires=[
         "psycopg2>=2.9",
@@ -15,7 +15,9 @@ setup(
     description="Python uchun oddiy PostgreSQL wrapper",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/AlijonovUz/PostgresDB",
+    project_urls={
+        "Source Code": "https://github.com/AlijonovUz/PostgresDB",
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

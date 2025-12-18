@@ -1,9 +1,10 @@
+from typing import Any
 import psycopg2
 
 
 class PostgresDB:
 
-    def __init__(self, database, user, password, host="localhost", port=5432):
+    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432) -> None:
         """
         PostgreSQL bazasiga ulanish.
 
@@ -14,70 +15,194 @@ class PostgresDB:
             host (str): Server manzili (standart = localhost)
             port (int): Port (standart = 5432)
         """
-        self.connect = psycopg2.connect(
+        self.connection = psycopg2.connect(
             database=database, user=user, password=password, host=host, port=port
         )
 
-    def manager(
+    def _manager(
             self,
-            sql=None,
-            params=None,
+            sql: str,
+            params: list | tuple | None = None,
             *,
-            commit=False,
-            fetchall=False,
-            fetchone=False,
-    ):
+            commit: bool = False,
+            many: bool = False,
+            fetchone: bool = False,
+            fetchall: bool = False,
+            fetchmany: int | None = None
+    ) -> Any:
         """
-        Barcha SQL amallarni boshqaruvchi yagona metod.
+        SQL so'rovlarini xavfsiz bajaruvchi yagona, ichki metod.
 
-        Parametrlar:
-            sql (str | None): Bajariladigan SQL so'rov.
-            params (tuple | list | None): Parametrlar.
-            commit (bool): Tranzaksiyani tasdiqlash.
-            fetchall (bool): Barcha natijalarni olish.
-            fetchone (bool): Bitta natija olish.
+        Bu metod **protected** bo‘lib, tashqaridan ishlatish tavsiya etilmaydi.
+        Public uchun `raw()` metodini ishlatish yaxshiroq.
+
+        Parametrlar
+        ----------
+        sql : str
+            Bajariladigan SQL so'rov. Majburiy.
+        params : tuple, list yoki None, ixtiyoriy
+            SQL so‘rovga parametrlarni bog‘lash uchun ishlatiladi. Default: None.
+            Agar `many=True` bo‘lsa, bu **tuple lar ro‘yxati** bo‘lishi kerak.
+        commit : bool, ixtiyoriy
+            Agar True bo‘lsa, tranzaksiya bajarilgandan keyin commit qilinadi.
+            Default: False. INSERT, UPDATE, DELETE kabi so‘rovlar uchun kerak.
+        many : bool, ixtiyoriy
+            Agar True bo‘lsa, so‘rovni bir nechta parametrlar bilan qayta bajaradi
+            (`cursor.executemany()` ishlatiladi). Default: False.
+            `fetchone`, `fetchall` yoki `fetchmany` bilan birga ishlatilmaydi.
+        fetchone : bool, ixtiyoriy
+            Agar True bo‘lsa, so‘rov natijasidan faqat bitta qator qaytariladi.
+            Default: False. `fetchall`, `fetchmany` yoki `many=True` bilan ishlamaydi.
+        fetchall : bool, ixtiyoriy
+            Agar True bo‘lsa, so‘rov natijasidagi barcha qatorlar qaytariladi.
+            Default: False. `fetchone`, `fetchmany` yoki `many=True` bilan ishlamaydi.
+        fetchmany : int yoki None, ixtiyoriy
+            Agar butun son N berilsa, so‘rov natijasidan N ta qator qaytariladi.
+            Default: None. `fetchone`, `fetchall` yoki `many=True` bilan ishlamaydi.
+
+        Returns
+        -------
+        result : any
+            So‘rov natijasi fetch parametriga bog‘liq:
+            - `fetchone=True` → bitta qator (tuple)
+            - `fetchall=True` → barcha qatorlar ro‘yxati
+            - `fetchmany=N` → N ta qator ro‘yxati
+            - `many=True` → None
+            - Fetch parametri ishlatilmasa → None
+
+        Raises
+        ------
+        ValueError
+            - Agar `sql` bo‘sh yoki None bo‘lsa.
+            - Agar bir vaqtda `fetchone` va `fetchall` True bo‘lsa.
+            - Agar `many=True` fetch parametrlar bilan birga ishlatilsa.
+
+        Izohlar
+        --------
+        - Bu metod connection va cursor ni context manager orqali avtomatik boshqaradi.
+        - Exceptionlar va tranzaksiya nazorati psycopg2 tomonidan amalga oshiriladi.
+        - Tashqarida ishlatishda `raw()` yoki yuqori darajadagi metodlar (`insert()`, `select()`, `insert_many()`) ishlatilishi tavsiya etiladi.
+        - Tashqaridan bevosita chaqirish tavsiya etilmaydi.
         """
 
-        with self.connect as connect:
-            result = None
-            with connect.cursor() as cursor:
+        if fetchone and fetchall:
+            raise ValueError("fetchone and fetchall cannot be True at the same time")
+        if many and (fetchone or fetchall or fetchmany):
+            raise ValueError("cannot use fetchone/fetchall/fetchmany with many=True")
+
+        with self.connection.cursor() as cursor:
+            if many:
+                cursor.executemany(sql, params)
+                result = None
+            else:
                 cursor.execute(sql, params)
-
-                if commit:
-                    connect.commit()
+                if fetchone:
+                    result = cursor.fetchone()
                 elif fetchall:
                     result = cursor.fetchall()
-                elif fetchone:
-                    result = cursor.fetchone()
+                elif fetchmany is not None:
+                    result = cursor.fetchmany(fetchmany)
+                else:
+                    result = None
 
-            return result
+            if commit:
+                self.connection.commit()
 
-    def create(self, table, columns):
+        return result
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def raw(
+            self,
+            sql: str,
+            params: list | tuple | None = None,
+            *,
+            commit: bool = False,
+            many: bool = False,
+            fetchone: bool = False,
+            fetchall: bool = False,
+            fetchmany: int | None = None
+    ) -> Any:
+        """
+        SQL so'rovini bevosita bajarish (raw execution).
+
+        Faqat ilg'or foydalanish uchun. Bu metod ichki `_manager` metodini chaqiradi.
+        Tashqaridan oddiy foydalanuvchilar uchun `select()`, `insert()`, `update()`,
+        `delete()` yoki `insert_many()` metodlarini ishlatish tavsiya etiladi.
+
+        Parametrlar
+        ----------
+        sql : str
+            Bajariladigan SQL so'rov. Majburiy.
+        params : tuple, list yoki None, ixtiyoriy
+            SQL so‘rovga parametrlarni bog‘lash uchun ishlatiladi. Default: None.
+        commit : bool, ixtiyoriy
+            Agar True bo‘lsa, tranzaksiya bajarilgandan keyin commit qilinadi.
+            Default: False.
+        fetchone : bool, ixtiyoriy
+            Agar True bo‘lsa, so‘rov natijasidan faqat bitta qator qaytariladi.
+            Default: False. `fetchall` bilan birga ishlatilmaydi.
+        fetchall : bool, ixtiyoriy
+            Agar True bo‘lsa, so‘rov natijasidagi barcha qatorlar qaytariladi.
+            Default: False. `fetchone` bilan birga ishlatilmaydi.
+
+        Returns
+        -------
+        result : any
+            So‘rov natijasi fetch parametriga bog‘liq:
+            - `fetchone=True` → bitta qator (tuple)
+            - `fetchall=True` → barcha qatorlar ro‘yxati
+            - Hech qaysi fetch parametr ishlatilmasa → None
+
+        Raises
+        ------
+        ValueError
+            - Agar bir vaqtda `fetchone` va `fetchall` True bo‘lsa.
+
+        Misol
+        ------
+        >>> db.raw("SELECT * FROM users WHERE age > %s", (18,), fetchall=True)
+        """
+        if fetchone and fetchall:
+            raise ValueError("fetchone va fetchall bir vaqtda True bo‘la olmaydi")
+
+        return self._manager(
+            sql,
+            params,
+            commit=commit,
+            many=many,
+            fetchone=fetchone,
+            fetchall=fetchall,
+            fetchmany=fetchmany,
+        )
+
+    def create(self, table: str, columns: str) -> None:
         """
         table: str - jadval nomi
         columns: str - ustunlar va turlari, misol: "id SERIAL PRIMARY KEY, name VARCHAR(100)"
         """
         sql = f"CREATE TABLE IF NOT EXISTS {table} ({columns})"
-        self.manager(sql, commit=True)
+        self._manager(sql, commit=True)
 
-    def drop(self, table):
+    def drop(self, table: str) -> None:
         """
         table: str - o'chiriladigan jadval nomi
         """
         sql = f"DROP TABLE IF EXISTS {table} CASCADE"
-        self.manager(sql, commit=True)
+        self._manager(sql, commit=True)
 
     def select(
             self,
-            table,
-            columns="*",
-            where=None,
-            join=None,
-            group_by=None,
-            order_by=None,
-            limit=None,
-            fetchone=False,
-    ):
+            table: str,
+            columns: str = "*",
+            where: tuple | None = None,
+            join: list[tuple] | None = None,
+            group_by: str | None = None,
+            order_by: str | None = None,
+            limit: int | None = None,
+            fetchone: bool = False
+    ) -> Any:
         """
         table: str — asosiy jadval
         columns: str — tanlanadigan ustunlar ("id, name")
@@ -111,10 +236,10 @@ class PostgresDB:
             params.append(limit)
 
         if fetchone:
-            return self.manager(sql, params, fetchone=True)
-        return self.manager(sql, params, fetchall=True)
+            return self._manager(sql, params, fetchone=True)
+        return self._manager(sql, params, fetchall=True)
 
-    def insert(self, table, columns, values):
+    def insert(self, table: str, columns: str, values: tuple | list) -> None:
         """
         table: str - jadval nomi
         columns: str - ustunlar, misol: "name, email, age"
@@ -122,9 +247,39 @@ class PostgresDB:
         """
         placeholders = ", ".join(["%s"] * len(values))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        self.manager(sql, values, commit=True)
+        self._manager(sql, values, commit=True)
 
-    def update(self, table, set_column, set_value, where_column, where_value):
+    def insert_many(self, table: str, columns: str, values_list: list[tuple]) -> None:
+        """
+        Jadvalga bir nechta qatorni qo'shish (bulk insert).
+
+        Parametrlar
+        ----------
+        table : str
+            Jadval nomi.
+        columns : str
+            Ustunlar, misol: "name, email, age".
+        values_list : list of tuples
+            Har tuple bitta qator qiymatlari, misol:
+            [("Ali", "ali@mail.com", 25), ("Vali", "vali@mail.com", 30)]
+
+        Misol
+        ------
+        >>> db.insert_many(
+        ...     "users",
+        ...     "name, email, age",
+        ...     [("Ali", "ali@mail.com", 25), ("Vali", "vali@mail.com", 30)]
+        ... )
+        """
+        if not values_list:
+            raise ValueError("values_list bo'sh bo'lishi mumkin emas")
+
+        placeholders = ", ".join(["%s"] * len(values_list[0]))
+        sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+
+        self._manager(sql, values_list, commit=True, many=True)
+
+    def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any) -> None:
         """
         Jadvaldagi ma'lumotni yangilash.
 
@@ -139,16 +294,16 @@ class PostgresDB:
             Faqat WHERE shartiga mos kelgan qatorlar yangilanadi.
         """
         sql = f"UPDATE {table} SET {set_column} = %s WHERE {where_column} = %s"
-        return self.manager(sql, (set_value, where_value), commit=True)
+        self._manager(sql, (set_value, where_value), commit=True)
 
-    def delete(self, table, where_column, where_value):
+    def delete(self, table: str, where_column: str, where_value: Any) -> None:
         """
         Jadvaldan qator o'chirish.
         """
         sql = f"DELETE FROM {table} WHERE {where_column} = %s"
-        return self.manager(sql, (where_value,), commit=True)
+        self._manager(sql, (where_value,), commit=True)
 
-    def list_tables(self, schema="public"):
+    def list_tables(self, schema="public") -> list[tuple]:
         """
         Bazadagi mavjud jadvallar ro'yxatini qaytaradi.
 
@@ -160,9 +315,9 @@ class PostgresDB:
               WHERE table_schema = %s
               ORDER BY table_name; \
               """
-        return self.manager(sql, (schema,), fetchall=True)
+        return self._manager(sql, (schema,), fetchall=True)
 
-    def describe_table(self, table, schema="public"):
+    def describe_table(self, table: str, schema: str = "public") -> list[tuple]:
         """
         Jadval ustunlari haqida ma'lumot beradi.
         """
@@ -176,9 +331,9 @@ class PostgresDB:
                 AND table_name = %s
               ORDER BY ordinal_position; \
               """
-        return self.manager(sql, (schema, table), fetchall=True)
+        return self._manager(sql, (schema, table), fetchall=True)
 
-    def alter(self, table, action):
+    def alter(self, table: str, action: str) -> Any:
         """
         Universal ALTER TABLE metodi.
 
@@ -186,4 +341,4 @@ class PostgresDB:
         action: str — ALTER TABLE dan keyingi qism
         """
         sql = f"ALTER TABLE {table} {action}"
-        return self.manager(sql, commit=True)
+        return self._manager(sql, commit=True)
