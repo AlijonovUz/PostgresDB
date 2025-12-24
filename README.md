@@ -120,10 +120,6 @@ async def main():
     specific_users = await db.select("users", where=("age > $1 AND name = $2", [18, "Ali"]))
     print("Maxsus foydalanuvchi:", specific_users)
     
-    # Faqat 2 ta qatorni olish
-    users = await db.select("users", fetchmany=2)
-    print(users)
-    
     # Jadvaldagi ma'lumotni yangilash
     await db.update("users", "age", 26, "name", "Ali")
 
