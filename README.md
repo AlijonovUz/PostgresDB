@@ -1,7 +1,7 @@
 # PostgresDB
 
-![PyPI Version](https://img.shields.io/pypi/v/nameuz)
-![Python Version](https://img.shields.io/pypi/pyversions/nameuz)
+![PyPI Version](https://img.shields.io/pypi/v/postgresdb3)
+![Python Version](https://img.shields.io/pypi/pyversions/postgresdb3)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 Oddiy va qulay Python wrapper PostgreSQL bazasi bilan ishlash uchun.
