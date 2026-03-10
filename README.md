@@ -1,74 +1,120 @@
-# PostgresDB
+# PostgresDB3
 
 ![PyPI Version](https://img.shields.io/pypi/v/postgresdb3)
 ![Python Version](https://img.shields.io/pypi/pyversions/postgresdb3)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Oddiy va qulay Python wrapper PostgreSQL bazasi bilan ishlash uchun.
+**PostgresDB3** — PostgreSQL bilan ishlash uchun oddiy, qulay va yengil Python wrapper.
+Kutubxona sync va async ishlashni qo‘llab-quvvatlaydi hamda sodda ORM imkoniyatlarini ham taqdim etadi.
 
-## O'rnatish
+---
 
-``` bash
+# O‘rnatish
+
+```bash
 pip install postgresdb3
 ```
 
-## Foydalanish (Sync)
+---
+
+# Asosiy imkoniyatlar
+
+* PostgreSQL bilan **sync va async** ishlash
+* CRUD amallari
+* `where`, `join`, `group_by`, `order_by`, `limit`, `offset`
+* `like`, `ilike`, `in`, `isnull`, `gt`, `lt` kabi filterlar
+* Raw SQL bajarish imkoniyati
+* Sodda ORM tizimi
+* Async ORM qo‘llab-quvvatlash
+
+---
+
+# Sync foydalanish
 
 ```python
 from postgresdb3 import PostgresDB
 
-# Bazaga ulanish
 db = PostgresDB(
     database="mydb",
     user="postgres",
     password="mypassword",
-    host="localhost",  # ixtiyoriy
-    port=5432          # ixtiyoriy
+    host="localhost",
+    port=5432
 )
 
 # Jadval yaratish
 db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
 
-# Bitta qator qo'shish
+# Bitta qator qo‘shish
 db.insert("users", "name, age", ("Ali", 25))
 
-# Bir nechta qator qo'shish
+# Bir nechta qator qo‘shish
 db.insert_many(
     "users",
     "name, age",
     [("Vali", 30), ("Gulnoza", 22), ("Hasan", 28)]
 )
 
-# Ma'lumotlarni olish
+# Barcha ma'lumotlarni olish
 users = db.select("users")
 print(users)
 
-# Bitta qatorni olish
-user = db.select("users", where=("name=%s", ["Ali"]), fetchone=True)
-print(user)
-
-# Shart bilan ma'lumot olish
-adults = db.select("users", where=("age > %s", [18]))
-print(adults)
-
-# Bir nechta shart bilan
-specific_users = db.select("users", where=("age > %s AND name = %s", [18, "Ali"]))
-print(specific_users)
-
-# Faqat 2 ta qatorni olish
-users = db.select("users", fetchmany=2)
+# Faqat kerakli ustunlarni olish
+users = db.select("users", columns=["id", "name"])
 print(users)
 
-# Jadvaldagi ma'lumotni yangilash
+# Bitta qatorni olish
+user = db.select("users", where={"name": "Ali"}, fetchone=True)
+print(user)
+
+# Shart bilan qidirish
+adults = db.select("users", where={"age__gt": 18})
+print(adults)
+
+# LIKE qidiruv
+users_like = db.select("users", where={"name__like": "%Ali%"})
+print(users_like)
+
+# ILIKE qidiruv
+users_ilike = db.select("users", where={"name__ilike": "%ali%"})
+print(users_ilike)
+
+# IN operatori
+selected_users = db.select("users", where={"id__in": [1, 2, 3]})
+print(selected_users)
+
+# NULL tekshirish
+users_with_name = db.select("users", where={"name__isnull": False})
+print(users_with_name)
+
+# Tartiblash va limit
+ordered_users = db.select(
+    "users",
+    where={"age__gt": 18},
+    order_by="age DESC",
+    limit=2
+)
+print(ordered_users)
+
+# Pagination
+paged_users = db.select(
+    "users",
+    order_by="id ASC",
+    limit=2,
+    offset=2
+)
+print(paged_users)
+
+# Ma'lumotni yangilash
 db.update("users", "age", 26, "name", "Ali")
 
-# Ma'lumotni o'chirish
+# Ma'lumotni o‘chirish
 db.delete("users", "name", "Ali")
 
-# Jadvalni o'chirish
+# Jadvalni o‘chirish
 db.drop("users", cascade=False)
 
-# To‘g‘ridan-to‘g‘ri SQL bajarish (raw)
+# Raw SQL bajarish
 result = db.raw("SELECT name, age FROM users WHERE age > %s", [25], fetchall=True)
 print(result)
 
@@ -76,7 +122,9 @@ print(result)
 db.close()
 ```
 
-## Foydalanish (Async)
+---
+
+# Async foydalanish
 
 ```python
 import asyncio
@@ -91,97 +139,95 @@ async def main():
         port=5432
     )
 
-    # Jadval yaratish
     await db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
 
-    # Bitta qator qo'shish
     await db.insert("users", "name, age", ["Ali", 25])
 
-    # Bir nechta qator qo'shish
     await db.insert_many(
         "users",
         "name, age",
         [["Vali", 30], ["Gulnoza", 22], ["Hasan", 28]]
     )
 
-    # Barcha ma'lumotlarni olish
     users = await db.select("users")
-    print("Barcha foydalanuvchilar:", users)
+    print(users)
 
-    # Bitta qatorni olish
-    user = await db.select("users", where=("name=$1", ["Ali"]), fetchone=True)
-    print("Foydalanuvchi Ali:", user)
+    user = await db.select("users", where={"name": "Ali"}, fetchone=True)
+    print(user)
 
-    # Shart bilan ma'lumot olish
-    adults = await db.select("users", where=("age > $1", [18]))
-    print("Kattalar:", adults)
+    adults = await db.select("users", where={"age__gt": 18})
+    print(adults)
 
-    # Bir nechta shart bilan
-    specific_users = await db.select("users", where=("age > $1 AND name = $2", [18, "Ali"]))
-    print("Maxsus foydalanuvchi:", specific_users)
-    
-    # Jadvaldagi ma'lumotni yangilash
+    users_ilike = await db.select("users", where={"name__ilike": "%ali%"})
+    print(users_ilike)
+
     await db.update("users", "age", 26, "name", "Ali")
 
-    # Ma'lumotni o'chirish
     await db.delete("users", "name", "Ali")
 
-    # Jadvalni o'chirish
     await db.drop("users", cascade=False)
 
-    # To‘g‘ridan-to‘g‘ri SQL bajarish (raw)
-    result = await db.raw("SELECT name, age FROM users WHERE age > $1", [25], fetchall=True)
-    print("Raw query result:", result)
+    result = await db.raw(
+        "SELECT name, age FROM users WHERE age > $1",
+        [25],
+        fetchall=True
+    )
 
-    # Connection poolni yopish
+    print(result)
+
     await db.close_pool()
 
 asyncio.run(main())
 ```
 
-## Parametrlar va metodlar
+---
 
-**PostgresDB(database, user, password, host="localhost", port=5432)**
---- bazaga ulanish.
+# ORM foydalanish
 
-**create(table, columns)** --- jadval yaratish, `columns` SQL
-sintaksisida.
+## Sync ORM
 
-**drop(table, cascade=False)** --- jadvalni o'chirish.
+```python
+from postgresdb3 import PostgresDB
+from postgresdb3.orm import Model
+from postgresdb3.orm.fields import Serial, String, Integer, Text
 
-**insert(table, columns, values)** --- ma'lumot qo'shish.
+db = PostgresDB(
+    database="mydb",
+    user="postgres",
+    password="mypassword"
+)
 
-**insert_many(table, columns, values_list)** --- bir nechta qator qo‘shish
+class User(Model):
+    db = db
+    table = "users"
 
-**select(table, columns="\*", where=None, join=None, group_by=None,
-order_by=None, limit=None, fetchone=False)** --- ma'lumotlarni olish.
+    id = Serial(primary_key=True)
+    name = String()
+    age = Integer()
+    about = Text(nullable=True)
 
-### where misollar:
+User.create_table()
 
-``` python
-db.select("users", where=("age > %s", [18]))
-db.select("users", where=("age > %s AND name = %s", [18, "Ali"]))
+user = User.create(name="Ali", age=20)
+
+print(User.all())
+
+user = User.find(1)
+
+user.update(name="Valijon")
+
+user.delete()
 ```
 
-### join misol:
+---
 
-``` python
-db.select("orders", join=[("INNER JOIN", "users", "users.id = orders.user_id")])
-```
-
-**update(table, set_column, set_value, where_column, where_value)** ---
-ma'lumotni yangilash.
-
-**delete(table, where_column, where_value)** --- ma'lumotni o'chirish.
-
-## Qo‘shimcha
+# Qo‘shimcha
 
 `%s` va `$1` bilan parametrizatsiya qilish xavfsiz va SQL injection'dan himoya qiladi.
 
 `where` va `join` yordamida murakkab so‘rovlar yozish mumkin.
 
-`limit`, `offset` va `order_by` parametrlaridan foydalanib ma'lumotlarni tartiblash va cheklash oson.
+`limit`, `offset` va `order_by` parametrlaridan foydalanib ma'lumotlarni tartiblash va sahifalash oson.
 
-`commit=True` bo‘lgan amallar darhol bazaga yoziladi, select() esa hech qachon o‘zgartirish kiritmaydi.
+`raw()` metodi orqali kerak bo‘lganda to‘g‘ridan-to‘g‘ri SQL so‘rov yozish mumkin.
 
-`raw()` — barcha SQL buyruqlarini bajaruvchi yagona metod bo‘lib, kerak bo‘lganda to‘g‘ridan‑to‘g‘ri SQL yozish imkonini beradi.

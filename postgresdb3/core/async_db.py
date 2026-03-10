@@ -95,11 +95,171 @@ class AsyncPostgresDB:
 
         await self._manager(sql, commit=True)
 
+    def _validate_identifier(self, value: str, name: str = "identifier") -> str:
+        """
+        Jadval yoki ustun nomi uchun minimal tekshiruv.
+        Faqat harf, raqam, underscore va nuqtaga ruxsat beradi.
+        """
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} bo'sh bo'lmasligi kerak")
+
+        cleaned = value.replace("_", "").replace(".", "")
+        if not cleaned.isalnum():
+            raise ValueError(f"Invalid {name}: {value}")
+
+        return value
+
+    def _normalize_columns(self, columns: str | list[str]) -> str:
+        """
+        columns list bo'lsa stringga aylantiradi.
+        list bo'lsa har bir column validate qilinadi.
+        str bo'lsa SQL expression bo'lishi mumkinligi uchun o'z holicha qaytariladi.
+        """
+        if isinstance(columns, list):
+            if not columns:
+                raise ValueError("columns bo'sh list bo'lmasligi kerak")
+
+            validated_columns = [self._validate_identifier(col, "column") for col in columns]
+            return ", ".join(validated_columns)
+
+        if not isinstance(columns, str) or not columns.strip():
+            raise ValueError("columns noto'g'ri bo'lishi mumkin emas")
+
+        return columns
+
+    def _build_where(self, where: Any, start_index: int = 1) -> tuple[str, list]:
+        """
+        Qo'llab-quvvatlanadi:
+
+        1) tuple:
+           ("age > $1", [18])
+
+        2) dict:
+           {
+               "age__gt": 18,
+               "name__ilike": "%ali%",
+               "status": "active",
+               "id__in": [1, 2, 3],
+               "deleted_at__isnull": True
+           }
+
+        3) list[tuple]:
+           [
+               ("age", ">", 18),
+               ("name", "ILIKE", "%ali%"),
+               ("status", "=", "active")
+           ]
+        """
+        if where is None:
+            return "", []
+
+        if isinstance(where, tuple) and len(where) == 2:
+            condition, values = where
+            return condition, list(values)
+
+        if isinstance(where, dict):
+            clauses = []
+            params = []
+            index = start_index
+
+            operator_map = {
+                "eq": "=",
+                "ne": "!=",
+                "gt": ">",
+                "gte": ">=",
+                "lt": "<",
+                "lte": "<=",
+                "like": "LIKE",
+                "ilike": "ILIKE",
+            }
+
+            for key, value in where.items():
+                if "__" in key:
+                    field, op = key.rsplit("__", 1)
+                else:
+                    field, op = key, "eq"
+
+                self._validate_identifier(field, "where field")
+
+                if op in operator_map:
+                    clauses.append(f"{field} {operator_map[op]} ${index}")
+                    params.append(value)
+                    index += 1
+
+                elif op == "in":
+                    if not isinstance(value, (list, tuple)) or not value:
+                        raise ValueError(f"{field}__in uchun bo'sh bo'lmagan list/tuple kerak")
+
+                    placeholders = ", ".join(f"${i}" for i in range(index, index + len(value)))
+                    clauses.append(f"{field} IN ({placeholders})")
+                    params.extend(value)
+                    index += len(value)
+
+                elif op == "not_in":
+                    if not isinstance(value, (list, tuple)) or not value:
+                        raise ValueError(f"{field}__not_in uchun bo'sh bo'lmagan list/tuple kerak")
+
+                    placeholders = ", ".join(f"${i}" for i in range(index, index + len(value)))
+                    clauses.append(f"{field} NOT IN ({placeholders})")
+                    params.extend(value)
+                    index += len(value)
+
+                elif op == "isnull":
+                    if value:
+                        clauses.append(f"{field} IS NULL")
+                    else:
+                        clauses.append(f"{field} IS NOT NULL")
+
+                else:
+                    raise ValueError(f"Noma'lum operator: {op}")
+
+            return " AND ".join(clauses), params
+
+        if isinstance(where, list):
+            clauses = []
+            params = []
+            index = start_index
+
+            for item in where:
+                if len(item) != 3:
+                    raise ValueError("List formatidagi where elementlari (field, operator, value) bo'lishi kerak")
+
+                field, operator, value = item
+                self._validate_identifier(field, "where field")
+                op = operator.upper()
+
+                if op in {"=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"}:
+                    clauses.append(f"{field} {op} ${index}")
+                    params.append(value)
+                    index += 1
+
+                elif op in {"IN", "NOT IN"}:
+                    if not isinstance(value, (list, tuple)) or not value:
+                        raise ValueError(f"{field} {op} uchun bo'sh bo'lmagan list/tuple kerak")
+
+                    placeholders = ", ".join(f"${i}" for i in range(index, index + len(value)))
+                    clauses.append(f"{field} {op} ({placeholders})")
+                    params.extend(value)
+                    index += len(value)
+
+                elif op == "IS NULL":
+                    clauses.append(f"{field} IS NULL")
+
+                elif op == "IS NOT NULL":
+                    clauses.append(f"{field} IS NOT NULL")
+
+                else:
+                    raise ValueError(f"Noma'lum operator: {operator}")
+
+            return " AND ".join(clauses), params
+
+        raise TypeError("where tuple, dict yoki list bo'lishi kerak")
+
     async def select(
             self,
             table: str,
-            columns: str = "*",
-            where: Optional[List[Any]] = None,
+            columns: str | list[str] = "*",
+            where: tuple | dict | list | None = None,
             join: Optional[List[tuple]] = None,
             group_by: Optional[str] = None,
             order_by: Optional[str] = None,
@@ -112,8 +272,11 @@ class AsyncPostgresDB:
 
         Args:
             table (str): Asosiy jadval nomi.
-            columns (str): Tanlanadigan ustunlar (default: "*").
-            where (Optional[List[Any]]): ("shart", [qiymatlar])
+            columns (str | list[str]): Tanlanadigan ustunlar.
+            where:
+                tuple — ("age > $1", [18])
+                dict  — {"age__gt": 18, "name__ilike": "%ali%"}
+                list  — [("age", ">", 18), ("name", "ILIKE", "%ali%")]
             join (Optional[List[tuple]]): [("INNER JOIN", "orders", "users.id = orders.user_id")]
             group_by (Optional[str]): GROUP BY ustuni.
             order_by (Optional[str]): ORDER BY qoidasi.
@@ -124,17 +287,22 @@ class AsyncPostgresDB:
         Returns:
             asyncpg.Record yoki list[asyncpg.Record]
         """
+        table = self._validate_identifier(table, "table")
+        columns = self._normalize_columns(columns)
+
         sql = f"SELECT {columns} FROM {table}"
         params: List[Any] = []
 
         if join:
             for join_type, join_table, on_condition in join:
+                join_table = self._validate_identifier(join_table, "join table")
                 sql += f" {join_type} {join_table} ON {on_condition}"
 
         if where:
-            condition, values = where
-            sql += f" WHERE {condition}"
-            params.extend(values)
+            condition, values = self._build_where(where, start_index=1)
+            if condition:
+                sql += f" WHERE {condition}"
+                params.extend(values)
 
         if group_by:
             sql += f" GROUP BY {group_by}"
@@ -143,11 +311,11 @@ class AsyncPostgresDB:
             sql += f" ORDER BY {order_by}"
 
         if limit is not None:
-            sql += f" LIMIT $%d" % (len(params) + 1)
+            sql += f" LIMIT ${len(params) + 1}"
             params.append(limit)
 
         if offset is not None:
-            sql += " OFFSET $%d" % (len(params) + 1)
+            sql += f" OFFSET ${len(params) + 1}"
             params.append(offset)
 
         return await self._manager(sql, *params, fetchone=fetchone, fetchall=not fetchone)

@@ -204,11 +204,158 @@ class PostgresDB:
             sql += " CASCADE"
         self._manager(sql, commit=True)
 
+    def _build_where(self, where: Any) -> tuple[str, list]:
+        """
+        Qo'llab-quvvatlanadi:
+
+        1) tuple:
+           ("age > %s", [18])
+
+        2) dict:
+           {
+               "age__gt": 18,
+               "name__ilike": "%ali%",
+               "status": "active",
+               "id__in": [1, 2, 3],
+               "deleted_at__isnull": True
+           }
+
+        3) list[tuple]:
+           [
+               ("age", ">", 18),
+               ("name", "ILIKE", "%ali%"),
+               ("status", "=", "active")
+           ]
+        """
+        if where is None:
+            return "", []
+
+        if isinstance(where, tuple) and len(where) == 2:
+            condition, values = where
+            return condition, list(values)
+
+        if isinstance(where, dict):
+            clauses = []
+            params = []
+
+            operator_map = {
+                "eq": "=",
+                "ne": "!=",
+                "gt": ">",
+                "gte": ">=",
+                "lt": "<",
+                "lte": "<=",
+                "like": "LIKE",
+                "ilike": "ILIKE",
+            }
+
+            for key, value in where.items():
+                if "__" in key:
+                    field, op = key.rsplit("__", 1)
+                else:
+                    field, op = key, "eq"
+
+                if op in operator_map:
+                    clauses.append(f"{field} {operator_map[op]} %s")
+                    params.append(value)
+
+                elif op == "in":
+                    if not isinstance(value, (list, tuple)) or not value:
+                        raise ValueError(f"{field}__in uchun bo'sh bo'lmagan list/tuple kerak")
+                    placeholders = ", ".join(["%s"] * len(value))
+                    clauses.append(f"{field} IN ({placeholders})")
+                    params.extend(value)
+
+                elif op == "not_in":
+                    if not isinstance(value, (list, tuple)) or not value:
+                        raise ValueError(f"{field}__not_in uchun bo'sh bo'lmagan list/tuple kerak")
+                    placeholders = ", ".join(["%s"] * len(value))
+                    clauses.append(f"{field} NOT IN ({placeholders})")
+                    params.extend(value)
+
+                elif op == "isnull":
+                    if value:
+                        clauses.append(f"{field} IS NULL")
+                    else:
+                        clauses.append(f"{field} IS NOT NULL")
+
+                else:
+                    raise ValueError(f"Noma'lum operator: {op}")
+
+            return " AND ".join(clauses), params
+
+        if isinstance(where, list):
+            clauses = []
+            params = []
+
+            for item in where:
+                if len(item) != 3:
+                    raise ValueError("List formatidagi where elementlari (field, operator, value) bo'lishi kerak")
+
+                field, operator, value = item
+                op = operator.upper()
+
+                if op in {"=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE"}:
+                    clauses.append(f"{field} {op} %s")
+                    params.append(value)
+
+                elif op in {"IN", "NOT IN"}:
+                    if not isinstance(value, (list, tuple)) or not value:
+                        raise ValueError(f"{field} {op} uchun bo'sh bo'lmagan list/tuple kerak")
+                    placeholders = ", ".join(["%s"] * len(value))
+                    clauses.append(f"{field} {op} ({placeholders})")
+                    params.extend(value)
+
+                elif op == "IS NULL":
+                    clauses.append(f"{field} IS NULL")
+
+                elif op == "IS NOT NULL":
+                    clauses.append(f"{field} IS NOT NULL")
+
+                else:
+                    raise ValueError(f"Noma'lum operator: {operator}")
+
+            return " AND ".join(clauses), params
+
+        raise TypeError("where tuple, dict yoki list bo'lishi kerak")
+
+    def _validate_identifier(self, value: str, name: str = "identifier") -> str:
+        """
+        Jadval yoki ustun nomi uchun minimal tekshiruv.
+        Faqat harf, raqam, underscore va nuqtaga ruxsat beradi.
+        """
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} bo'sh bo'lmasligi kerak")
+
+        cleaned = value.replace("_", "").replace(".", "")
+        if not cleaned.isalnum():
+            raise ValueError(f"Invalid {name}: {value}")
+
+        return value
+
+    def _normalize_columns(self, columns: str | list[str]) -> str:
+        """
+        columns list bo'lsa stringga aylantiradi.
+        list bo'lsa har bir column validate qilinadi.
+        str bo'lsa SQL expression bo'lishi mumkinligi uchun o'z holicha qaytariladi.
+        """
+        if isinstance(columns, list):
+            if not columns:
+                raise ValueError("columns bo'sh list bo'lmasligi kerak")
+
+            validated_columns = [self._validate_identifier(col, "column") for col in columns]
+            return ", ".join(validated_columns)
+
+        if not isinstance(columns, str) or not columns.strip():
+            raise ValueError("columns noto'g'ri bo'lishi mumkin emas")
+
+        return columns
+
     def select(
             self,
             table: str,
-            columns: str = "*",
-            where: tuple | None = None,
+            columns: str | list[str] = "*",
+            where: tuple | dict | list | None = None,
             join: list[tuple] | None = None,
             group_by: str | None = None,
             order_by: str | None = None,
@@ -219,8 +366,13 @@ class PostgresDB:
     ) -> Any:
         """
         table: str — asosiy jadval
-        columns: str — tanlanadigan ustunlar ("id, name")
-        where: tuple | None — ("age > %s", [18])
+        columns:
+            str — "id, name"
+            list[str] — ["id", "name"]
+        where:
+            tuple — ("age > %s", [18])
+            dict  — {"age__gt": 18, "name__ilike": "%ali%"}
+            list  — [("age", ">", 18), ("name", "ILIKE", "%ali%")]
         join: list | None — [("INNER JOIN", "orders", "users.id = orders.user_id")]
         group_by: str | None — "age"
         order_by: str | None — "age DESC"
@@ -230,17 +382,22 @@ class PostgresDB:
         fetchmany: int | None
         """
 
+        table = self._validate_identifier(table, "table")
+        columns = self._normalize_columns(columns)
+
         sql = f"SELECT {columns} FROM {table}"
         params = []
 
         if join:
             for join_type, join_table, on_condition in join:
+                join_table = self._validate_identifier(join_table, "join table")
                 sql += f" {join_type} {join_table} ON {on_condition}"
 
         if where:
-            condition, values = where
-            sql += f" WHERE {condition}"
-            params.extend(values)
+            condition, values = self._build_where(where)
+            if condition:
+                sql += f" WHERE {condition}"
+                params.extend(values)
 
         if group_by:
             sql += f" GROUP BY {group_by}"
@@ -249,7 +406,7 @@ class PostgresDB:
             sql += f" ORDER BY {order_by}"
 
         if limit is not None:
-            sql += f" LIMIT %s"
+            sql += " LIMIT %s"
             params.append(limit)
 
         if offset is not None:
@@ -337,7 +494,7 @@ class PostgresDB:
               SELECT table_name
               FROM information_schema.tables
               WHERE table_schema = %s
-              ORDER BY table_name; 
+              ORDER BY table_name; \
               """
         return self._manager(sql, (schema,), fetchall=True)
 
@@ -353,7 +510,7 @@ class PostgresDB:
               FROM information_schema.columns
               WHERE table_schema = %s
                 AND table_name = %s
-              ORDER BY ordinal_position; 
+              ORDER BY ordinal_position; \
               """
         return self._manager(sql, (schema, table), fetchall=True)
 
