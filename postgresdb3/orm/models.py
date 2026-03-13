@@ -29,6 +29,54 @@ class Model(BaseModel, metaclass=ModelMeta):
         return qs.first()
 
     @classmethod
+    def get(cls, **kwargs):
+        results = cls.filter(**kwargs).limit(2).all()
+
+        if not results:
+            raise ValueError("Obyekt topilmadi")
+
+        if len(results) > 1:
+            raise ValueError("Bir nechta obyekt topildi")
+
+        return results[0]
+
+    @classmethod
+    def order_by(cls, value):
+        return cls.query().order_by(value)
+
+    @classmethod
+    def limit(cls, value):
+        return cls.query().limit(value)
+
+    @classmethod
+    def offset(cls, value):
+        return cls.query().offset(value)
+
+    @classmethod
+    def columns(cls, value):
+        return cls.query().columns(value)
+
+    @classmethod
+    def join(cls, value):
+        return cls.query().join(value)
+
+    @classmethod
+    def group_by(cls, value):
+        return cls.query().group_by(value)
+
+    @classmethod
+    def exclude(cls, **kwargs):
+        return cls.query().exclude(**kwargs)
+
+    @classmethod
+    def count(cls):
+        return cls.query().count()
+
+    @classmethod
+    def exists(cls):
+        return cls.query().exists()
+
+    @classmethod
     def create(cls, **kwargs):
         cls._check_setup()
 
@@ -164,6 +212,54 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         if kwargs:
             qs = qs.filter(**kwargs)
         return await qs.first()
+
+    @classmethod
+    async def get(cls, **kwargs):
+        results = await cls.filter(**kwargs).limit(2).all()
+
+        if not results:
+            raise ValueError("Obyekt topilmadi")
+
+        if len(results) > 1:
+            raise ValueError("Bir nechta obyekt topildi")
+
+        return results[0]
+
+    @classmethod
+    def order_by(cls, value):
+        return cls.query().order_by(value)
+
+    @classmethod
+    def limit(cls, value):
+        return cls.query().limit(value)
+
+    @classmethod
+    def offset(cls, value):
+        return cls.query().offset(value)
+
+    @classmethod
+    def columns(cls, value):
+        return cls.query().columns(value)
+
+    @classmethod
+    def join(cls, value):
+        return cls.query().join(value)
+
+    @classmethod
+    def group_by(cls, value):
+        return cls.query().group_by(value)
+
+    @classmethod
+    def exclude(cls, **kwargs):
+        return cls.query().exclude(**kwargs)
+
+    @classmethod
+    def count(cls):
+        return cls.query().count()
+
+    @classmethod
+    def exists(cls):
+        return cls.query().exists()
 
     @classmethod
     async def create(cls, **kwargs):

@@ -5,7 +5,15 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **PostgresDB3** — PostgreSQL bilan ishlash uchun oddiy, qulay va yengil Python wrapper.
-Kutubxona sync va async ishlashni qo‘llab-quvvatlaydi hamda sodda ORM imkoniyatlarini ham taqdim etadi.
+
+Kutubxona quyidagilarni qo‘llab-quvvatlaydi:
+
+- Sync va Async ishlash
+- CRUD operatsiyalari
+- Query builder (`where`, `join`, `group_by`, `order_by`, `limit`, `offset`)
+- Kengaytirilgan filterlar (`gt`, `lt`, `like`, `ilike`, `in`, `isnull`)
+- Raw SQL bajarish
+- Sodda ORM tizimi
 
 ---
 
@@ -13,19 +21,7 @@ Kutubxona sync va async ishlashni qo‘llab-quvvatlaydi hamda sodda ORM imkoniya
 
 ```bash
 pip install postgresdb3
-```
-
----
-
-# Asosiy imkoniyatlar
-
-* PostgreSQL bilan **sync va async** ishlash
-* CRUD amallari
-* `where`, `join`, `group_by`, `order_by`, `limit`, `offset`
-* `like`, `ilike`, `in`, `isnull`, `gt`, `lt` kabi filterlar
-* Raw SQL bajarish imkoniyati
-* Sodda ORM tizimi
-* Async ORM qo‘llab-quvvatlash
+````
 
 ---
 
@@ -37,88 +33,30 @@ from postgresdb3 import PostgresDB
 db = PostgresDB(
     database="mydb",
     user="postgres",
-    password="mypassword",
-    host="localhost",
-    port=5432
+    password="mypassword"
 )
 
 # Jadval yaratish
 db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
 
-# Bitta qator qo‘shish
+# Qator qo‘shish
 db.insert("users", "name, age", ("Ali", 25))
 
-# Bir nechta qator qo‘shish
-db.insert_many(
-    "users",
-    "name, age",
-    [("Vali", 30), ("Gulnoza", 22), ("Hasan", 28)]
-)
-
-# Barcha ma'lumotlarni olish
+# Barcha ma'lumotlar
 users = db.select("users")
-print(users)
-
-# Faqat kerakli ustunlarni olish
-users = db.select("users", columns=["id", "name"])
-print(users)
-
-# Bitta qatorni olish
-user = db.select("users", where={"name": "Ali"}, fetchone=True)
-print(user)
 
 # Shart bilan qidirish
 adults = db.select("users", where={"age__gt": 18})
-print(adults)
 
-# LIKE qidiruv
-users_like = db.select("users", where={"name__like": "%Ali%"})
-print(users_like)
+# Tartiblash
+users = db.select("users", order_by="age DESC")
 
-# ILIKE qidiruv
-users_ilike = db.select("users", where={"name__ilike": "%ali%"})
-print(users_ilike)
-
-# IN operatori
-selected_users = db.select("users", where={"id__in": [1, 2, 3]})
-print(selected_users)
-
-# NULL tekshirish
-users_with_name = db.select("users", where={"name__isnull": False})
-print(users_with_name)
-
-# Tartiblash va limit
-ordered_users = db.select(
-    "users",
-    where={"age__gt": 18},
-    order_by="age DESC",
-    limit=2
-)
-print(ordered_users)
-
-# Pagination
-paged_users = db.select(
-    "users",
-    order_by="id ASC",
-    limit=2,
-    offset=2
-)
-print(paged_users)
-
-# Ma'lumotni yangilash
+# Yangilash
 db.update("users", "age", 26, "name", "Ali")
 
-# Ma'lumotni o‘chirish
+# O‘chirish
 db.delete("users", "name", "Ali")
 
-# Jadvalni o‘chirish
-db.drop("users", cascade=False)
-
-# Raw SQL bajarish
-result = db.raw("SELECT name, age FROM users WHERE age > %s", [25], fetchall=True)
-print(result)
-
-# Connectionni yopish
 db.close()
 ```
 
@@ -131,49 +69,24 @@ import asyncio
 from postgresdb3 import AsyncPostgresDB
 
 async def main():
+
     db = AsyncPostgresDB(
         database="mydb",
         user="postgres",
-        password="mypassword",
-        host="localhost",
-        port=5432
+        password="mypassword"
     )
 
     await db.create("users", "id SERIAL PRIMARY KEY, name VARCHAR(100), age INT")
 
     await db.insert("users", "name, age", ["Ali", 25])
 
-    await db.insert_many(
-        "users",
-        "name, age",
-        [["Vali", 30], ["Gulnoza", 22], ["Hasan", 28]]
-    )
-
     users = await db.select("users")
-    print(users)
-
-    user = await db.select("users", where={"name": "Ali"}, fetchone=True)
-    print(user)
 
     adults = await db.select("users", where={"age__gt": 18})
-    print(adults)
-
-    users_ilike = await db.select("users", where={"name__ilike": "%ali%"})
-    print(users_ilike)
 
     await db.update("users", "age", 26, "name", "Ali")
 
     await db.delete("users", "name", "Ali")
-
-    await db.drop("users", cascade=False)
-
-    result = await db.raw(
-        "SELECT name, age FROM users WHERE age > $1",
-        [25],
-        fetchall=True
-    )
-
-    print(result)
 
     await db.close_pool()
 
@@ -184,12 +97,14 @@ asyncio.run(main())
 
 # ORM foydalanish
 
+PostgresDB3 oddiy ORM tizimini ham taqdim etadi.
+
 ## Sync ORM
 
 ```python
 from postgresdb3 import PostgresDB
 from postgresdb3.orm import Model
-from postgresdb3.orm.fields import Serial, String, Integer, Text
+from postgresdb3.orm.fields import Serial, String, Integer
 
 db = PostgresDB(
     database="mydb",
@@ -204,30 +119,111 @@ class User(Model):
     id = Serial(primary_key=True)
     name = String()
     age = Integer()
-    about = Text(nullable=True)
 
 User.create_table()
 
+# create
 user = User.create(name="Ali", age=20)
 
-print(User.all())
+# all
+users = User.all()
 
+# find
 user = User.find(1)
 
+# filter
+users = User.filter(age__gt=18).all()
+
+# get
+user = User.get(id=1)
+
+# exclude
+users = User.exclude(name="Ali").all()
+
+# update
 user.update(name="Valijon")
 
+# delete
 user.delete()
 ```
 
 ---
 
-# Qo‘shimcha
+## Async ORM
 
-`%s` va `$1` bilan parametrizatsiya qilish xavfsiz va SQL injection'dan himoya qiladi.
+```python
+from postgresdb3 import AsyncPostgresDB
+from postgresdb3.orm import AsyncModel
+from postgresdb3.orm.fields import Serial, String, Integer
 
-`where` va `join` yordamida murakkab so‘rovlar yozish mumkin.
+db = AsyncPostgresDB(
+    database="mydb",
+    user="postgres",
+    password="mypassword"
+)
 
-`limit`, `offset` va `order_by` parametrlaridan foydalanib ma'lumotlarni tartiblash va sahifalash oson.
+class User(AsyncModel):
+    db = db
+    table = "users"
 
-`raw()` metodi orqali kerak bo‘lganda to‘g‘ridan-to‘g‘ri SQL so‘rov yozish mumkin.
+    id = Serial(primary_key=True)
+    name = String()
+    age = Integer()
 
+await User.create_table()
+
+user = await User.create(name="Ali", age=20)
+
+users = await User.all()
+
+user = await User.find(1)
+
+users = await User.filter(age__gt=18).all()
+
+user = await User.get(id=1)
+
+users = await User.exclude(name="Ali").all()
+
+await user.update(name="Valijon")
+
+await user.delete()
+```
+
+---
+
+# Filter operatorlari
+
+| Operator | Tavsif           |
+| -------- | ---------------- |
+| eq       | teng             |
+| ne       | teng emas        |
+| gt       | katta            |
+| gte      | katta yoki teng  |
+| lt       | kichik           |
+| lte      | kichik yoki teng |
+| like     | LIKE             |
+| ilike    | ILIKE            |
+| in       | IN               |
+| not_in   | NOT IN           |
+| isnull   | NULL tekshirish  |
+
+Misol:
+
+```python
+User.filter(age__gt=18)
+User.filter(name__ilike="%ali%")
+User.filter(id__in=[1,2,3])
+User.filter(name__ne="Ali")
+```
+
+---
+
+# Raw SQL
+
+```python
+result = db.raw(
+    "SELECT name FROM users WHERE age > %s",
+    [18],
+    fetchall=True
+)
+```

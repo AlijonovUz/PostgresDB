@@ -241,6 +241,7 @@ class PostgresDB:
             operator_map = {
                 "eq": "=",
                 "ne": "!=",
+                "not": "!=",
                 "gt": ">",
                 "gte": ">=",
                 "lt": "<",
