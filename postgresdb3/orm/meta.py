@@ -1,4 +1,5 @@
-from .fields import Field
+from .fields import Field, ForeignKey
+from .relations import ForeignKeyRelation, ReverseRelation, AsyncForeignKeyRelation
 
 
 class ModelMeta(type):
@@ -38,4 +39,23 @@ class ModelMeta(type):
         if pk_name:
             attrs["pk"] = pk_name
 
-        return super().__new__(mcls, name, bases, attrs)
+        cls = super().__new__(mcls, name, bases, attrs)
+
+        is_async_model = any(base.__name__ == "AsyncModel" for base in bases)
+
+        for field_name, field in fields.items():
+            if isinstance(field, ForeignKey):
+                relation_name = field_name[:-3] if field_name.endswith("_id") else field_name
+
+                if not hasattr(cls, relation_name):
+                    if is_async_model:
+                        setattr(cls, relation_name, AsyncForeignKeyRelation(field_name, field.to))
+                    else:
+                        setattr(cls, relation_name, ForeignKeyRelation(field_name, field.to))
+
+                related_name = field.related_name or f"{name.lower()}_set"
+
+                if not hasattr(field.to, related_name):
+                    setattr(field.to, related_name, ReverseRelation(cls, field_name))
+
+        return cls

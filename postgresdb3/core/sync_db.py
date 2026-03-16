@@ -5,16 +5,6 @@ import psycopg2
 class PostgresDB:
 
     def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432) -> None:
-        """
-        PostgreSQL bazasiga ulanish.
-
-        Parametrlar:
-            database (str): Bazaning nomi
-            user (str): Foydalanuvchi
-            password (str): Parol
-            host (str): Server manzili (standart = localhost)
-            port (int): Port (standart = 5432)
-        """
         self.connection = psycopg2.connect(
             database=database, user=user, password=password, host=host, port=port
         )
@@ -30,60 +20,6 @@ class PostgresDB:
             fetchall: bool = False,
             fetchmany: int | None = None
     ) -> Any:
-        """
-        SQL so'rovlarini xavfsiz bajaruvchi yagona, ichki metod.
-
-        Bu metod **protected** bo‘lib, tashqaridan ishlatish tavsiya etilmaydi.
-        Public uchun `raw()` metodini ishlatish yaxshiroq.
-
-        Parametrlar
-        ----------
-        sql : str
-            Bajariladigan SQL so'rov. Majburiy.
-        params : tuple, list yoki None, ixtiyoriy
-            SQL so‘rovga parametrlarni bog‘lash uchun ishlatiladi. Default: None.
-            Agar `many=True` bo‘lsa, bu **tuple lar ro‘yxati** bo‘lishi kerak.
-        commit : bool, ixtiyoriy
-            Agar True bo‘lsa, tranzaksiya bajarilgandan keyin commit qilinadi.
-            Default: False. INSERT, UPDATE, DELETE kabi so‘rovlar uchun kerak.
-        many : bool, ixtiyoriy
-            Agar True bo‘lsa, so‘rovni bir nechta parametrlar bilan qayta bajaradi
-            (`cursor.executemany()` ishlatiladi). Default: False.
-            `fetchone`, `fetchall` yoki `fetchmany` bilan birga ishlatilmaydi.
-        fetchone : bool, ixtiyoriy
-            Agar True bo‘lsa, so‘rov natijasidan faqat bitta qator qaytariladi.
-            Default: False. `fetchall`, `fetchmany` yoki `many=True` bilan ishlamaydi.
-        fetchall : bool, ixtiyoriy
-            Agar True bo‘lsa, so‘rov natijasidagi barcha qatorlar qaytariladi.
-            Default: False. `fetchone`, `fetchmany` yoki `many=True` bilan ishlamaydi.
-        fetchmany : int yoki None, ixtiyoriy
-            Agar butun son N berilsa, so‘rov natijasidan N ta qator qaytariladi.
-            Default: None. `fetchone`, `fetchall` yoki `many=True` bilan ishlamaydi.
-
-        Returns
-        -------
-        result : any
-            So‘rov natijasi fetch parametriga bog‘liq:
-            - `fetchone=True` → bitta qator (tuple)
-            - `fetchall=True` → barcha qatorlar ro‘yxati
-            - `fetchmany=N` → N ta qator ro‘yxati
-            - `many=True` → None
-            - Fetch parametri ishlatilmasa → None
-
-        Raises
-        ------
-        ValueError
-            - Agar `sql` bo‘sh yoki None bo‘lsa.
-            - Agar bir vaqtda `fetchone` va `fetchall` True bo‘lsa.
-            - Agar `many=True` fetch parametrlar bilan birga ishlatilsa.
-
-        Izohlar
-        --------
-        - Bu metod connection va cursor ni context manager orqali avtomatik boshqaradi.
-        - Exceptionlar va tranzaksiya nazorati psycopg2 tomonidan amalga oshiriladi.
-        - Tashqarida ishlatishda `raw()` yoki yuqori darajadagi metodlar (`insert()`, `select()`, `insert_many()`) ishlatilishi tavsiya etiladi.
-        - Tashqaridan bevosita chaqirish tavsiya etilmaydi.
-        """
 
         if not sql or not sql.strip():
             raise ValueError("SQL query cannot be empty")
@@ -113,12 +49,6 @@ class PostgresDB:
         return result
 
     def close(self) -> None:
-        """
-           Faol bazaga ulanishni yopadi.
-
-           Bu metod chaqirilgandan so‘ng, connection obyekti ishlatilmaydi.
-           Ulanishni yopishdan oldin, har qanday kutilayotgan tranzaksiyalarni commit qilganingizga ishonch hosil qiling.
-        """
         self.connection.close()
 
     def raw(
@@ -132,46 +62,6 @@ class PostgresDB:
             fetchall: bool = False,
             fetchmany: int | None = None
     ) -> Any:
-        """
-        SQL so'rovini bevosita bajarish (raw execution).
-
-        Faqat ilg'or foydalanish uchun. Bu metod ichki `_manager` metodini chaqiradi.
-        Tashqaridan oddiy foydalanuvchilar uchun `select()`, `insert()`, `update()`,
-        `delete()` yoki `insert_many()` metodlarini ishlatish tavsiya etiladi.
-
-        Parametrlar
-        ----------
-        sql : str
-            Bajariladigan SQL so'rov. Majburiy.
-        params : tuple, list yoki None, ixtiyoriy
-            SQL so‘rovga parametrlarni bog‘lash uchun ishlatiladi. Default: None.
-        commit : bool, ixtiyoriy
-            Agar True bo‘lsa, tranzaksiya bajarilgandan keyin commit qilinadi.
-            Default: False.
-        fetchone : bool, ixtiyoriy
-            Agar True bo‘lsa, so‘rov natijasidan faqat bitta qator qaytariladi.
-            Default: False. `fetchall` bilan birga ishlatilmaydi.
-        fetchall : bool, ixtiyoriy
-            Agar True bo‘lsa, so‘rov natijasidagi barcha qatorlar qaytariladi.
-            Default: False. `fetchone` bilan birga ishlatilmaydi.
-
-        Returns
-        -------
-        result : any
-            So‘rov natijasi fetch parametriga bog‘liq:
-            - `fetchone=True` → bitta qator (tuple)
-            - `fetchall=True` → barcha qatorlar ro‘yxati
-            - Hech qaysi fetch parametr ishlatilmasa → None
-
-        Raises
-        ------
-        ValueError
-            - Agar bir vaqtda `fetchone` va `fetchall` True bo‘lsa.
-
-        Misol
-        ------
-        >>> db.raw("SELECT * FROM users WHERE age > %s", (18,), fetchall=True)
-        """
 
         return self._manager(
             sql,
@@ -184,49 +74,16 @@ class PostgresDB:
         )
 
     def create(self, table: str, columns: str) -> None:
-        """
-        table: str - jadval nomi
-        columns: str - ustunlar va turlari, misol: "id SERIAL PRIMARY KEY, name VARCHAR(100)"
-        """
         sql = f"CREATE TABLE IF NOT EXISTS {table} ({columns})"
         self._manager(sql, commit=True)
 
     def drop(self, table: str, cascade: bool = False) -> None:
-        """
-        Jadvalni o'chiradi.
-
-        Parametrlar:
-            table (str): O'chiriladigan jadval nomi
-            cascade (bool): Agar True bo'lsa, jadval bilan bog'liq barcha obyektlar ham o'chiriladi. Default: True
-        """
         sql = f"DROP TABLE IF EXISTS {table}"
         if cascade:
             sql += " CASCADE"
         self._manager(sql, commit=True)
 
     def _build_where(self, where: Any) -> tuple[str, list]:
-        """
-        Qo'llab-quvvatlanadi:
-
-        1) tuple:
-           ("age > %s", [18])
-
-        2) dict:
-           {
-               "age__gt": 18,
-               "name__ilike": "%ali%",
-               "status": "active",
-               "id__in": [1, 2, 3],
-               "deleted_at__isnull": True
-           }
-
-        3) list[tuple]:
-           [
-               ("age", ">", 18),
-               ("name", "ILIKE", "%ali%"),
-               ("status", "=", "active")
-           ]
-        """
         if where is None:
             return "", []
 
@@ -321,10 +178,6 @@ class PostgresDB:
         raise TypeError("where tuple, dict yoki list bo'lishi kerak")
 
     def _validate_identifier(self, value: str, name: str = "identifier") -> str:
-        """
-        Jadval yoki ustun nomi uchun minimal tekshiruv.
-        Faqat harf, raqam, underscore va nuqtaga ruxsat beradi.
-        """
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} bo'sh bo'lmasligi kerak")
 
@@ -335,11 +188,6 @@ class PostgresDB:
         return value
 
     def _normalize_columns(self, columns: str | list[str]) -> str:
-        """
-        columns list bo'lsa stringga aylantiradi.
-        list bo'lsa har bir column validate qilinadi.
-        str bo'lsa SQL expression bo'lishi mumkinligi uchun o'z holicha qaytariladi.
-        """
         if isinstance(columns, list):
             if not columns:
                 raise ValueError("columns bo'sh list bo'lmasligi kerak")
@@ -365,24 +213,6 @@ class PostgresDB:
             fetchone: bool = False,
             fetchmany: int | None = None
     ) -> Any:
-        """
-        table: str — asosiy jadval
-        columns:
-            str — "id, name"
-            list[str] — ["id", "name"]
-        where:
-            tuple — ("age > %s", [18])
-            dict  — {"age__gt": 18, "name__ilike": "%ali%"}
-            list  — [("age", ">", 18), ("name", "ILIKE", "%ali%")]
-        join: list | None — [("INNER JOIN", "orders", "users.id = orders.user_id")]
-        group_by: str | None — "age"
-        order_by: str | None — "age DESC"
-        limit: int | None
-        offset: int | None
-        fetchone: bool
-        fetchmany: int | None
-        """
-
         table = self._validate_identifier(table, "table")
         columns = self._normalize_columns(columns)
 
@@ -421,38 +251,17 @@ class PostgresDB:
         else:
             return self._manager(sql, params, fetchall=True)
 
-    def insert(self, table: str, columns: str, values: tuple | list) -> None:
-        """
-        table: str - jadval nomi
-        columns: str - ustunlar, misol: "name, email, age"
-        values: tuple yoki list - ustun qiymatlari, misol: ("Ali", "ali@mail.com", 25)
-        """
+    def insert(self, table: str, columns: str, values: tuple | list, returning: str | None = None):
         placeholders = ", ".join(["%s"] * len(values))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+
+        if returning:
+            sql += f" RETURNING {returning}"
+            return self._manager(sql, values, fetchone=True)
+
         self._manager(sql, values, commit=True)
 
     def insert_many(self, table: str, columns: str, values_list: list[tuple]) -> None:
-        """
-        Jadvalga bir nechta qatorni qo'shish (bulk insert).
-
-        Parametrlar
-        ----------
-        table : str
-            Jadval nomi.
-        columns : str
-            Ustunlar, misol: "name, email, age".
-        values_list : list of tuples
-            Har tuple bitta qator qiymatlari, misol:
-            [("Ali", "ali@mail.com", 25), ("Vali", "vali@mail.com", 30)]
-
-        Misol
-        ------
-        >>> db.insert_many(
-        ...     "users",
-        ...     "name, email, age",
-        ...     [("Ali", "ali@mail.com", 25), ("Vali", "vali@mail.com", 30)]
-        ... )
-        """
         if not values_list:
             raise ValueError("values_list bo'sh bo'lishi mumkin emas")
 
@@ -462,35 +271,122 @@ class PostgresDB:
         self._manager(sql, values_list, commit=True, many=True)
 
     def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any) -> None:
-        """
-        Jadvaldagi ma'lumotni yangilash.
-
-        Parametrlar:
-            table (str): Jadval nomi.
-            set_column (str): O'zgartiriladigan ustun.
-            set_value (Any): Yangi qiymat.
-            where_column (str): Filtrlash ustuni.
-            where_value (Any): Qaysi qatorda o'zgarish bo'lishi.
-
-        Izoh:
-            Faqat WHERE shartiga mos kelgan qatorlar yangilanadi.
-        """
         sql = f"UPDATE {table} SET {set_column} = %s WHERE {where_column} = %s"
         self._manager(sql, (set_value, where_value), commit=True)
 
+    def update_fields(self, table: str, data: dict, where_column: str, where_value: Any) -> int:
+        table = self._validate_identifier(table, "table")
+        where_column = self._validate_identifier(where_column, "where column")
+
+        if not data:
+            raise ValueError("Yangilash uchun data bo'sh bo'lmasligi kerak")
+
+        set_parts = []
+        params = []
+
+        for key, value in data.items():
+            key = self._validate_identifier(key, "column")
+            set_parts.append(f"{key} = %s")
+            params.append(value)
+
+        params.append(where_value)
+
+        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_column} = %s"
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            affected_rows = cursor.rowcount
+            self.connection.commit()
+
+        return affected_rows
+
+    def update_where(self, table: str, data: dict, where: tuple | dict | list) -> int:
+        table = self._validate_identifier(table, "table")
+
+        if not data:
+            raise ValueError("Yangilash uchun data bo'sh bo'lmasligi kerak")
+
+        if not where:
+            raise ValueError("update_where uchun where bo'sh bo'lmasligi kerak")
+
+        set_parts = []
+        params = []
+
+        for key, value in data.items():
+            key = self._validate_identifier(key, "column")
+            set_parts.append(f"{key} = %s")
+            params.append(value)
+
+        where_sql, where_params = self._build_where(where)
+        if not where_sql:
+            raise ValueError("WHERE sharti noto'g'ri")
+
+        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
+        params.extend(where_params)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(sql, tuple(params))
+            affected_rows = cursor.rowcount
+            self.connection.commit()
+
+        return affected_rows
+
     def delete(self, table: str, where_column: str, where_value: Any) -> None:
-        """
-        Jadvaldan qator o'chirish.
-        """
         sql = f"DELETE FROM {table} WHERE {where_column} = %s"
         self._manager(sql, (where_value,), commit=True)
 
-    def list_tables(self, schema="public") -> list[tuple]:
-        """
-        Bazadagi mavjud jadvallar ro'yxatini qaytaradi.
 
-        schema: str — schema nomi (standart: public)
-        """
+    def delete_where(self, table: str, where: tuple | dict | list) -> int:
+        table = self._validate_identifier(table, "table")
+
+        if not where:
+            raise ValueError("delete_where uchun where bo'sh bo'lmasligi kerak")
+
+        where_sql, where_params = self._build_where(where)
+        if not where_sql:
+            raise ValueError("WHERE sharti noto'g'ri")
+
+        sql = f"DELETE FROM {table} WHERE {where_sql}"
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(sql, tuple(where_params))
+            affected_rows = cursor.rowcount
+            self.connection.commit()
+
+        return affected_rows
+
+    def exists_where(
+            self,
+            table: str,
+            where: tuple | dict | list | None = None,
+            join: list[tuple] | None = None,
+            group_by: str | None = None,
+    ) -> bool:
+        table = self._validate_identifier(table, "table")
+
+        sql = f"SELECT 1 FROM {table}"
+        params = []
+
+        if join:
+            for join_type, join_table, on_condition in join:
+                join_table = self._validate_identifier(join_table, "join table")
+                sql += f" {join_type} {join_table} ON {on_condition}"
+
+        if where:
+            condition, values = self._build_where(where)
+            if condition:
+                sql += f" WHERE {condition}"
+                params.extend(values)
+
+        if group_by:
+            sql += f" GROUP BY {group_by}"
+
+        sql += " LIMIT 1"
+
+        record = self._manager(sql, params, fetchone=True)
+        return record is not None
+
+    def list_tables(self, schema="public") -> list[tuple]:
         sql = """
               SELECT table_name
               FROM information_schema.tables
@@ -500,9 +396,6 @@ class PostgresDB:
         return self._manager(sql, (schema,), fetchall=True)
 
     def describe_table(self, table: str, schema: str = "public") -> list[tuple]:
-        """
-        Jadval ustunlari haqida ma'lumot beradi.
-        """
         sql = """
               SELECT column_name,
                      data_type,
@@ -516,11 +409,5 @@ class PostgresDB:
         return self._manager(sql, (schema, table), fetchall=True)
 
     def alter(self, table: str, action: str) -> Any:
-        """
-        Universal ALTER TABLE metodi.
-
-        table: str — jadval nomi
-        action: str — ALTER TABLE dan keyingi qism
-        """
         sql = f"ALTER TABLE {table} {action}"
         return self._manager(sql, commit=True)

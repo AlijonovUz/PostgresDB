@@ -29,6 +29,13 @@ class Model(BaseModel, metaclass=ModelMeta):
         return qs.first()
 
     @classmethod
+    def last(cls, **kwargs):
+        qs = cls.query()
+        if kwargs:
+            qs = qs.filter(**kwargs)
+        return qs.last()
+
+    @classmethod
     def get(cls, **kwargs):
         results = cls.filter(**kwargs).limit(2).all()
 
@@ -94,14 +101,14 @@ class Model(BaseModel, metaclass=ModelMeta):
             columns.append(key)
             values.append(value)
 
-        cls.db.insert(cls.table, ", ".join(columns), tuple(values))
+        record = cls.db.insert(
+            cls.table,
+            ", ".join(columns),
+            tuple(values),
+            returning="*"
+        )
 
-        pk_name = cls.get_pk_name()
-
-        if pk_name in kwargs and kwargs[pk_name] is not None:
-            return cls.find(kwargs[pk_name])
-
-        return cls.first(**kwargs)
+        return cls._from_record(record)
 
     @classmethod
     def create_table(cls):
@@ -141,12 +148,18 @@ class Model(BaseModel, metaclass=ModelMeta):
                 setattr(self, field_name, getattr(created, field_name, None))
             return self
 
+        data = {}
         for field_name in self.__class__._fields:
             if field_name == pk_name:
                 continue
+            data[field_name] = getattr(self, field_name, None)
 
-            value = getattr(self, field_name, None)
-            self.__class__.db.update(self.__class__.table, field_name, value, pk_name, pk_value)
+        self.__class__.db.update_fields(
+            self.__class__.table,
+            data,
+            pk_name,
+            pk_value
+        )
 
         return self
 
@@ -214,6 +227,13 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         return await qs.first()
 
     @classmethod
+    async def last(cls, **kwargs):
+        qs = cls.query()
+        if kwargs:
+            qs = qs.filter(**kwargs)
+        return await qs.last()
+
+    @classmethod
     async def get(cls, **kwargs):
         results = await cls.filter(**kwargs).limit(2).all()
 
@@ -279,14 +299,14 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             columns.append(key)
             values.append(value)
 
-        await cls.db.insert(cls.table, ", ".join(columns), values)
+        record = await cls.db.insert(
+            cls.table,
+            ", ".join(columns),
+            values,
+            returning="*"
+        )
 
-        pk_name = cls.get_pk_name()
-
-        if pk_name in kwargs and kwargs[pk_name] is not None:
-            return await cls.find(kwargs[pk_name])
-
-        return await cls.first(**kwargs)
+        return cls._from_record(record)
 
     @classmethod
     async def create_table(cls):
@@ -326,12 +346,18 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
                 setattr(self, field_name, getattr(created, field_name, None))
             return self
 
+        data = {}
         for field_name in self.__class__._fields:
             if field_name == pk_name:
                 continue
+            data[field_name] = getattr(self, field_name, None)
 
-            value = getattr(self, field_name, None)
-            await self.__class__.db.update(self.__class__.table, field_name, value, pk_name, pk_value)
+        await self.__class__.db.update_fields(
+            self.__class__.table,
+            data,
+            pk_name,
+            pk_value
+        )
 
         return self
 
