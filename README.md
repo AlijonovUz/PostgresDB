@@ -123,7 +123,11 @@ Siz o'z loyihangiz papkasida bitta `manage.py` yaratib olib, jadvallarni SQL o'q
 ```python
 import sys
 from postgresdb3 import execute_from_command_line
-from myapp.models import db_sync  # Sizning bazaga ulangan db obyektingiz
+from myapp.models import db_sync  # 1. Sizning bazaga ulangan db obyektingiz
+
+# 2. DIQQAT: Migratsiya dvigateli modellarni ko'rishi uchun 
+# ularni albatta import qilib qo'yishingiz SHART!
+from myapp.models import User, Post, Tag 
 
 if __name__ == "__main__":
     execute_from_command_line(db_sync, sys.argv)
