@@ -80,7 +80,11 @@ class QuerySet:
         for field_name in fields:
             field = self.model._fields.get(field_name)
             if not field or not hasattr(field, "to"):
-                raise ValueError(f"{field_name} ForeignKey emas yoki topilmadi")
+                raise ValueError(f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi.")
+                
+            from .fields.foreign import ManyToManyField
+            if isinstance(field, ManyToManyField):
+                raise TypeError(f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating.")
                 
             related_table = field.to.table
             on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
@@ -486,7 +490,11 @@ class AsyncQuerySet:
         for field_name in fields:
             field = self.model._fields.get(field_name)
             if not field or not hasattr(field, "to"):
-                raise ValueError(f"{field_name} ForeignKey emas yoki topilmadi")
+                raise ValueError(f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi.")
+                
+            from .fields.foreign import ManyToManyField
+            if isinstance(field, ManyToManyField):
+                raise TypeError(f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating.")
                 
             related_table = field.to.table
             on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
