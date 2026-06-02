@@ -149,28 +149,6 @@ class Model(BaseModel, metaclass=ModelMeta):
             
         cls.db._manager(sql, values_list, commit=True, many=True)
 
-    @classmethod
-    def create_table(cls):
-        cls._check_setup()
-
-        columns_sql = []
-        has_primary_key = False
-
-        for field_name, field in cls._fields.items():
-            if getattr(field, "primary_key", False):
-                has_primary_key = True
-            columns_sql.append(field.to_sql())
-
-        if not has_primary_key:
-            columns_sql.insert(0, f"{cls.get_pk_name()} SERIAL PRIMARY KEY")
-
-        cls.db.create(cls.table, ", ".join(columns_sql))
-
-    @classmethod
-    def drop_table(cls, cascade=False):
-        cls._check_setup()
-        cls.db.drop(cls.table, cascade=cascade)
-
     def save(self):
         self.__class__._check_setup()
 
@@ -384,28 +362,6 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             values_list.append(val_tuple)
             
         await cls.db._manager(sql, values_list, commit=True, many=True)
-
-    @classmethod
-    async def create_table(cls):
-        cls._check_setup()
-
-        columns_sql = []
-        has_primary_key = False
-
-        for field_name, field in cls._fields.items():
-            if getattr(field, "primary_key", False):
-                has_primary_key = True
-            columns_sql.append(field.to_sql())
-
-        if not has_primary_key:
-            columns_sql.insert(0, f"{cls.get_pk_name()} SERIAL PRIMARY KEY")
-
-        await cls.db.create(cls.table, ", ".join(columns_sql))
-
-    @classmethod
-    async def drop_table(cls, cascade=False):
-        cls._check_setup()
-        await cls.db.drop(cls.table, cascade=cascade)
 
     async def save(self):
         self.__class__._check_setup()

@@ -22,9 +22,10 @@ class MigrationEngine:
                 if getattr(field, "primary_key", False):
                     fields[field_name] += " PRIMARY KEY"
             
-                                                                                          
             if not any(getattr(f, "primary_key", False) for f in model._fields.values()):
-                fields[model.get_pk_name()] = "SERIAL PRIMARY KEY"
+                ordered_fields = {model.get_pk_name(): "SERIAL PRIMARY KEY"}
+                ordered_fields.update(fields)
+                fields = ordered_fields
                 
             meta_options = getattr(model, "_meta_options", {})
             state[table_name] = {
