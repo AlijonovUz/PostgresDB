@@ -110,7 +110,7 @@ users = User.raw_sql("SELECT * FROM users WHERE age > %s", 20)
 print(users[0].name) # Bu Model Obyekti!
 
 # Asinxron
-users = await AsyncUser.raw_sql("SELECT * FROM asyncusers WHERE age > $1", 20)
+users = await AsyncUser.raw_sql("SELECT * FROM asyncusers WHERE age > %s", 20)
 ```
 
 ---
@@ -222,15 +222,16 @@ for u in users:
     u.age += 1
 User.bulk_update(users, fields=["age"])
 ```
+*(Eslatma: Ommaviy amallar to'liq atomar tranzaksiyaga o'ralgan, xatolik chiqsa 100% orqaga qaytadi!)*
 
 **Sahifalash (Pagination):**
 Foydalanuvchiga ma'lumotlarni qismlab (limit/offset bilan avtomatik) taqdim etish:
 ```python
 result = User.query().paginate(page=1, per_page=20)
-print(result["total"])        # Jami elementlar soni
-print(result["pages"])        # Jami sahifalar soni
-print(result["has_next"])     # Keyingi sahifa bormi? (True/False)
-print(result["data"])         # Modellar ro'yxati (20 ta)
+print(result.total)        # Jami elementlar soni
+print(result.pages)        # Jami sahifalar soni
+print(result.has_next)     # Keyingi sahifa bormi? (True/False)
+print(result.data)         # Modellar ro'yxati (20 ta)
 ```
 
 ---

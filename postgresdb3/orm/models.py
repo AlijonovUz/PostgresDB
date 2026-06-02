@@ -131,7 +131,8 @@ class Model(BaseModel, metaclass=ModelMeta):
             values_list.append(val_tuple)
             
         columns_str = ", ".join(columns)
-        cls.db.insert_many(cls.table, columns_str, values_list)
+        with cls.db.transaction():
+            cls.db.insert_many(cls.table, columns_str, values_list)
 
     @classmethod
     def bulk_update(cls, instances: list["Model"], fields: list[str]) -> None:
@@ -147,7 +148,8 @@ class Model(BaseModel, metaclass=ModelMeta):
             val_tuple = tuple(getattr(inst, f, None) for f in fields) + (getattr(inst, pk_name),)
             values_list.append(val_tuple)
             
-        cls.db._manager(sql, values_list, commit=True, many=True)
+        with cls.db.transaction():
+            cls.db._manager(sql, values_list, commit=True, many=True)
 
     def save(self):
         self.__class__._check_setup()
@@ -345,7 +347,8 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             values_list.append(val_tuple)
             
         columns_str = ", ".join(columns)
-        await cls.db.insert_many(cls.table, columns_str, values_list)
+        async with cls.db.transaction():
+            await cls.db.insert_many(cls.table, columns_str, values_list)
 
     @classmethod
     async def bulk_update(cls, instances: list["AsyncModel"], fields: list[str]) -> None:
@@ -361,7 +364,8 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             val_tuple = tuple(getattr(inst, f, None) for f in fields) + (getattr(inst, pk_name),)
             values_list.append(val_tuple)
             
-        await cls.db._manager(sql, values_list, commit=True, many=True)
+        async with cls.db.transaction():
+            await cls.db._manager(sql, values_list, commit=True, many=True)
 
     async def save(self):
         self.__class__._check_setup()

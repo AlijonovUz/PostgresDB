@@ -1,3 +1,18 @@
+from dataclasses import dataclass
+from typing import TypeVar, Generic
+
+T = TypeVar('T')
+
+@dataclass
+class PaginationResult(Generic[T]):
+    total: int
+    pages: int
+    current_page: int
+    per_page: int
+    has_next: bool
+    has_prev: bool
+    data: list[T]
+
 class QuerySet:
     def __init__(self, model):
         self.model = model
@@ -313,15 +328,15 @@ class QuerySet:
         total = self.count()
         pages = (total + per_page - 1) // per_page
         data = self.limit(per_page).offset((page - 1) * per_page).all()
-        return {
-            "total": total,
-            "pages": pages,
-            "current_page": page,
-            "per_page": per_page,
-            "has_next": page < pages,
-            "has_prev": page > 1,
-            "data": data
-        }
+        return PaginationResult(
+            total=total,
+            pages=pages,
+            current_page=page,
+            per_page=per_page,
+            has_next=page < pages,
+            has_prev=page > 1,
+            data=data
+        )
 
     def exists(self):
         where = self._build_where()
@@ -657,15 +672,15 @@ class AsyncQuerySet:
         total = await self.count()
         pages = (total + per_page - 1) // per_page
         data = await self.limit(per_page).offset((page - 1) * per_page).all()
-        return {
-            "total": total,
-            "pages": pages,
-            "current_page": page,
-            "per_page": per_page,
-            "has_next": page < pages,
-            "has_prev": page > 1,
-            "data": data
-        }
+        return PaginationResult(
+            total=total,
+            pages=pages,
+            current_page=page,
+            per_page=per_page,
+            has_next=page < pages,
+            has_prev=page > 1,
+            data=data
+        )
 
     async def exists(self):
         where = self._build_where()

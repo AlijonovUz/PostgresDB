@@ -27,6 +27,10 @@ class AsyncPostgresDB:
         self._async_conn = contextvars.ContextVar(f"async_conn_{id(self)}", default=None)
 
     async def _manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False, many=False) -> Any:
+        if "%s" in sql:
+            parts = sql.split("%s")
+            sql = "".join([part + f"${i+1}" for i, part in enumerate(parts[:-1])]) + parts[-1]
+            
         if self.echo:
             print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
         if not self.pool:
