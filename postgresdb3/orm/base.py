@@ -6,11 +6,18 @@ class BaseModel:
 
     def __init__(self, **kwargs):
         for field_name in self._fields:
-            setattr(self, field_name, kwargs.get(field_name))
+            if field_name in kwargs:
+                try:
+                    setattr(self, field_name, kwargs[field_name])
+                except AttributeError:
+                    pass
 
         for key, value in kwargs.items():
             if key not in self._fields:
-                setattr(self, key, value)
+                try:
+                    setattr(self, key, value)
+                except AttributeError:
+                    pass
 
     def __iter__(self):
         for field in self._fields:

@@ -5,14 +5,14 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="postgresdb3",
-    version="0.7.0",
+    version="1.0.0",
     packages=find_packages(),
     install_requires=[
         "psycopg2>=2.9",
         "asyncpg>=0.31.0"
     ],
     author="Abdulbosit Alijonov",
-    description="Python uchun oddiy PostgreSQL wrapper",
+    description="High-Performance Sync and Async PostgreSQL ORM for Python",
     long_description=long_description,
     long_description_content_type="text/markdown",
     project_urls={

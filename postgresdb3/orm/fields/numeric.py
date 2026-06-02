@@ -11,6 +11,12 @@ class BigInteger(Field):
 class SmallInteger(Field):
     sql_type = "SMALLINT"
 
+class Float(Field):
+    sql_type = "REAL"
+
+class Double(Field):
+    sql_type = "DOUBLE PRECISION"
+
 
 class Serial(Field):
     sql_type = "SERIAL"

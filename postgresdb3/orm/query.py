@@ -61,16 +61,59 @@ class QuerySet:
             where
         )
 
-    def filter(self, **kwargs):
+    def join(self, table, on_condition, join_type="INNER JOIN"):
+        qs = self._clone()
+        if qs._join is None:
+            qs._join = []
+        qs._join.append((join_type, table, on_condition))
+        return qs
+
+    def select_related(self, *fields):
+        """
+        N+1 muammosini oldini olish uchun yozilgan metod.
+        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi.
+        """
+        qs = self._clone()
+        if qs._join is None:
+            qs._join = []
+            
+        for field_name in fields:
+            field = self.model._fields.get(field_name)
+            if not field or not hasattr(field, "to"):
+                raise ValueError(f"{field_name} ForeignKey emas yoki topilmadi")
+                
+            related_table = field.to.table
+            on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
+            qs._join.append(("LEFT JOIN", related_table, on_condition))
+            
+        return qs
+
+    def prefetch_related(self, *fields):
+        """
+        Ko'pga-ko'p (ManyToMany) va Birga-ko'p (OneToMany) bog'lanishlar uchun N+1 muammosini oldini olish.
+        Ushbu metod ma'lumotlarni alohida so'rovlar orqali olib, xotirada bog'lab qo'yadi.
+        """
+        qs = self._clone()
+        if not hasattr(qs, "_prefetch"):
+            qs._prefetch = []
+        qs._prefetch.extend(fields)
+        return qs
+
+    def filter(self, *args, **kwargs):
         qs = self._clone()
 
-        if not kwargs:
-            return qs
-
         if qs._where is None:
-            qs._where = {}
+            qs._where = []
 
-        qs._where.update(kwargs)
+        if not isinstance(qs._where, list):
+            qs._where = [qs._where]
+
+        for arg in args:
+            qs._where.append(arg)
+
+        if kwargs:
+            qs._where.append(kwargs)
+
         return qs
 
     def exclude(self, **kwargs):
@@ -127,7 +170,69 @@ class QuerySet:
             limit=self._limit,
             offset=self._offset,
         )
-        return self.model._from_records(records)
+        
+        instances = self.model._from_records(records)
+        
+                                            
+        if hasattr(self, "_prefetch") and self._prefetch and instances:
+            for field_name in self._prefetch:
+                relation = getattr(self.model, field_name, None)
+                if not relation:
+                    continue
+                
+                pk_name = self.model.get_pk_name()
+                instance_pks = [getattr(inst, pk_name) for inst in instances]
+                
+                                                  
+                from postgresdb3.orm.relations import ManyToManyRelation, ReverseRelation
+                if isinstance(relation, ManyToManyRelation):
+                    target_model = relation.target_model
+                    through_table = relation.through_table
+                    source_col = relation.source_col
+                    target_col = relation.target_col
+                    
+                    placeholders = ", ".join(["%s"] * len(instance_pks))
+                    sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
+                    
+                                      
+                    conn = self.model.db.pool.getconn()
+                    try:
+                        with conn.cursor() as cursor:
+                            cursor.execute(sql, tuple(instance_pks))
+                            mapping_records = cursor.fetchall()
+                    finally:
+                        self.model.db.pool.putconn(conn)
+                        
+                    mapping_dict = {}
+                    target_ids = set()
+                    for r in mapping_records:
+                        s_id, t_id = r[0], r[1]
+                        if s_id not in mapping_dict:
+                            mapping_dict[s_id] = []
+                        mapping_dict[s_id].append(t_id)
+                        target_ids.add(t_id)
+                        
+                    if target_ids:
+                        target_instances = target_model.filter(**{f"{target_model.get_pk_name()}__in": list(target_ids)}).all()
+                        target_map = {getattr(t, target_model.get_pk_name()): t for t in target_instances}
+                        
+                        for inst in instances:
+                            pk = getattr(inst, pk_name)
+                            prefetched = [target_map[t_id] for t_id in mapping_dict.get(pk, []) if t_id in target_map]
+                            setattr(inst, f"_prefetched_{field_name}", prefetched)
+                            
+                elif isinstance(relation, ReverseRelation):
+                    related_model = relation.related_model
+                    fk_name = relation.fk_name
+                    
+                    related_instances = related_model.filter(**{f"{fk_name}__in": instance_pks}).all()
+                    
+                    for inst in instances:
+                        pk = getattr(inst, pk_name)
+                        prefetched = [r for r in related_instances if getattr(r, fk_name) == pk]
+                        setattr(inst, f"_prefetched_{field_name}", prefetched)
+        
+        return instances
 
     def first(self):
         where = self._build_where()
@@ -176,36 +281,43 @@ class QuerySet:
         where = self._build_where()
         record = self.model.db.select(
             self.model.table,
-            columns="COUNT(*) AS count",
+            columns="COUNT(*)",
             where=where,
             join=self._join,
-            group_by=self._group_by,
-            order_by=None,
-            limit=None,
-            offset=None,
-            fetchone=True,
+            fetchone=True
         )
+        if isinstance(record, dict) or hasattr(record, "keys"):
+            return list(record.values())[0]
+        return record[0] if record else 0
 
-        if record is None:
-            return 0
-
-        if isinstance(record, dict):
-            return record.get("count", 0)
-
-        if hasattr(record, "_asdict"):
-            return record._asdict().get("count", 0)
-
-        if hasattr(record, "items"):
-            return dict(record).get("count", 0)
-
-        if isinstance(record, (tuple, list)):
-            return record[0] if record else 0
-
-        value = getattr(record, "count", 0)
-        if callable(value):
-            return 0
-
-        return value
+    def aggregate(self, **kwargs):
+        columns = []
+        for alias, agg in kwargs.items():
+            columns.append(f"{agg.to_sql()} AS {alias}")
+            
+        where = self._build_where()
+        record = self.model.db.select(
+            self.model.table,
+            columns=", ".join(columns),
+            where=where,
+            join=self._join,
+            fetchone=True
+        )
+        return dict(record) if record else {}
+        
+    def paginate(self, page: int, per_page: int):
+        total = self.count()
+        pages = (total + per_page - 1) // per_page
+        data = self.limit(per_page).offset((page - 1) * per_page).all()
+        return {
+            "total": total,
+            "pages": pages,
+            "current_page": page,
+            "per_page": per_page,
+            "has_next": page < pages,
+            "has_prev": page > 1,
+            "data": data
+        }
 
     def exists(self):
         where = self._build_where()
@@ -217,22 +329,31 @@ class QuerySet:
         )
 
     def _build_where(self):
-        if self._where and self._exclude:
-            where = dict(self._where)
-            for key, value in self._exclude.items():
-                where[f"{key}__not"] = value
-            return where
-
+        from postgresdb3.orm.expressions import Q
+        
+        final_q = Q()
+        
         if self._where:
-            return dict(self._where)
+            if isinstance(self._where, dict):
+                final_q &= Q(**self._where)
+            elif isinstance(self._where, list):
+                for w in self._where:
+                    if isinstance(w, Q):
+                        final_q &= w
+                    elif isinstance(w, dict):
+                        final_q &= Q(**w)
 
         if self._exclude:
-            where = {}
-            for key, value in self._exclude.items():
-                where[f"{key}__not"] = value
-            return where
+            if isinstance(self._exclude, dict):
+                final_q &= ~Q(**self._exclude)
+            elif isinstance(self._exclude, list):
+                for e in self._exclude:
+                    if isinstance(e, Q):
+                        final_q &= ~e
+                    elif isinstance(e, dict):
+                        final_q &= ~Q(**e)
 
-        return None
+        return final_q if (final_q.conditions or final_q.children) else None
 
 
 class AsyncQuerySet:
@@ -298,28 +419,32 @@ class AsyncQuerySet:
             where
         )
 
-    def filter(self, **kwargs):
+    def filter(self, *args, **kwargs):
         qs = self._clone()
-
-        if not kwargs:
-            return qs
 
         if qs._where is None:
-            qs._where = {}
+            qs._where = []
 
-        qs._where.update(kwargs)
+        if not isinstance(qs._where, list):
+            qs._where = [qs._where]
+
+        qs._where.extend(args)
+        if kwargs:
+            qs._where.append(kwargs)
         return qs
 
-    def exclude(self, **kwargs):
+    def exclude(self, *args, **kwargs):
         qs = self._clone()
 
-        if not kwargs:
-            return qs
-
         if qs._exclude is None:
-            qs._exclude = {}
+            qs._exclude = []
+            
+        if not isinstance(qs._exclude, list):
+            qs._exclude = [qs._exclude]
 
-        qs._exclude.update(kwargs)
+        qs._exclude.extend(args)
+        if kwargs:
+            qs._exclude.append(kwargs)
         return qs
 
     def order_by(self, value):
@@ -342,14 +467,43 @@ class AsyncQuerySet:
         qs._columns = value
         return qs
 
-    def join(self, value):
+    def join(self, table, on_condition, join_type="INNER JOIN"):
         qs = self._clone()
-        qs._join = value
+        if qs._join is None:
+            qs._join = []
+        qs._join.append((join_type, table, on_condition))
+        return qs
+
+    def select_related(self, *fields):
+        """
+        N+1 muammosini oldini olish uchun yozilgan asinxron metod.
+        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi.
+        """
+        qs = self._clone()
+        if qs._join is None:
+            qs._join = []
+            
+        for field_name in fields:
+            field = self.model._fields.get(field_name)
+            if not field or not hasattr(field, "to"):
+                raise ValueError(f"{field_name} ForeignKey emas yoki topilmadi")
+                
+            related_table = field.to.table
+            on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
+            qs._join.append(("LEFT JOIN", related_table, on_condition))
+            
         return qs
 
     def group_by(self, value):
         qs = self._clone()
         qs._group_by = value
+        return qs
+
+    def prefetch_related(self, *fields):
+        qs = self._clone()
+        if not hasattr(qs, "_prefetch"):
+            qs._prefetch = []
+        qs._prefetch.extend(fields)
         return qs
 
     async def all(self):
@@ -365,7 +519,60 @@ class AsyncQuerySet:
             offset=self._offset,
             fetchone=False,
         )
-        return self.model._from_records(records)
+        
+        instances = self.model._from_records(records)
+        
+        if hasattr(self, "_prefetch") and self._prefetch and instances:
+            for field_name in self._prefetch:
+                relation = getattr(self.model, field_name, None)
+                if not relation:
+                    continue
+                
+                pk_name = self.model.get_pk_name()
+                instance_pks = [getattr(inst, pk_name) for inst in instances]
+                
+                from postgresdb3.orm.relations import ManyToManyRelation, AsyncReverseRelation
+                if isinstance(relation, ManyToManyRelation):
+                    target_model = relation.target_model
+                    through_table = relation.through_table
+                    source_col = relation.source_col
+                    target_col = relation.target_col
+                    
+                    placeholders = ", ".join([f"${i+1}" for i in range(len(instance_pks))])
+                    sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
+                    
+                    mapping_records = await self.model.db._manager(sql, *instance_pks, fetchall=True)
+                    
+                    mapping_dict = {}
+                    target_ids = set()
+                    for r in mapping_records:
+                        s_id, t_id = r[source_col], r[target_col]
+                        if s_id not in mapping_dict:
+                            mapping_dict[s_id] = []
+                        mapping_dict[s_id].append(t_id)
+                        target_ids.add(t_id)
+                        
+                    if target_ids:
+                        target_instances = await target_model.filter(**{f"{target_model.get_pk_name()}__in": list(target_ids)}).all()
+                        target_map = {getattr(t, target_model.get_pk_name()): t for t in target_instances}
+                        
+                        for inst in instances:
+                            pk = getattr(inst, pk_name)
+                            prefetched = [target_map[t_id] for t_id in mapping_dict.get(pk, []) if t_id in target_map]
+                            setattr(inst, f"_prefetched_{field_name}", prefetched)
+                            
+                elif isinstance(relation, AsyncReverseRelation):
+                    related_model = relation.related_model
+                    fk_name = relation.fk_name
+                    
+                    related_instances = await related_model.filter(**{f"{fk_name}__in": instance_pks}).all()
+                    
+                    for inst in instances:
+                        pk = getattr(inst, pk_name)
+                        prefetched = [r for r in related_instances if getattr(r, fk_name) == pk]
+                        setattr(inst, f"_prefetched_{field_name}", prefetched)
+        
+        return instances
 
     async def first(self):
         where = self._build_where()
@@ -414,36 +621,43 @@ class AsyncQuerySet:
         where = self._build_where()
         record = await self.model.db.select(
             self.model.table,
-            columns="COUNT(*) AS count",
+            columns="COUNT(*)",
             where=where,
             join=self._join,
-            group_by=self._group_by,
-            order_by=None,
-            limit=None,
-            offset=None,
-            fetchone=True,
+            fetchone=True
         )
-
-        if record is None:
-            return 0
-
-        if isinstance(record, dict):
-            return record.get("count", 0)
-
-        if hasattr(record, "_asdict"):
-            return record._asdict().get("count", 0)
-
         if hasattr(record, "items"):
-            return dict(record).get("count", 0)
+            return list(record.values())[0]
+        return record[0] if record else 0
 
-        if isinstance(record, (tuple, list)):
-            return record[0] if record else 0
-
-        value = getattr(record, "count", 0)
-        if callable(value):
-            return 0
-
-        return value
+    async def aggregate(self, **kwargs):
+        columns = []
+        for alias, agg in kwargs.items():
+            columns.append(f"{agg.to_sql()} AS {alias}")
+            
+        where = self._build_where()
+        record = await self.model.db.select(
+            self.model.table,
+            columns=", ".join(columns),
+            where=where,
+            join=self._join,
+            fetchone=True
+        )
+        return dict(record) if record else {}
+        
+    async def paginate(self, page: int, per_page: int):
+        total = await self.count()
+        pages = (total + per_page - 1) // per_page
+        data = await self.limit(per_page).offset((page - 1) * per_page).all()
+        return {
+            "total": total,
+            "pages": pages,
+            "current_page": page,
+            "per_page": per_page,
+            "has_next": page < pages,
+            "has_prev": page > 1,
+            "data": data
+        }
 
     async def exists(self):
         where = self._build_where()
@@ -455,19 +669,28 @@ class AsyncQuerySet:
         )
 
     def _build_where(self):
-        if self._where and self._exclude:
-            where = dict(self._where)
-            for key, value in self._exclude.items():
-                where[f"{key}__not"] = value
-            return where
-
+        from postgresdb3.orm.expressions import Q
+        
+        final_q = Q()
+        
         if self._where:
-            return dict(self._where)
+            if isinstance(self._where, dict):
+                final_q &= Q(**self._where)
+            elif isinstance(self._where, list):
+                for w in self._where:
+                    if isinstance(w, Q):
+                        final_q &= w
+                    elif isinstance(w, dict):
+                        final_q &= Q(**w)
 
         if self._exclude:
-            where = {}
-            for key, value in self._exclude.items():
-                where[f"{key}__not"] = value
-            return where
+            if isinstance(self._exclude, dict):
+                final_q &= ~Q(**self._exclude)
+            elif isinstance(self._exclude, list):
+                for e in self._exclude:
+                    if isinstance(e, Q):
+                        final_q &= ~e
+                    elif isinstance(e, dict):
+                        final_q &= ~Q(**e)
 
-        return None
+        return final_q if (final_q.conditions or final_q.children) else None

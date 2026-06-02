@@ -1,13 +1,29 @@
 from typing import Any, Optional
 import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
+from contextlib import contextmanager
+import threading
+from postgresdb3.orm.expressions import Q, FExpression
 
 
 class PostgresDB:
+    """
+    PostgreSQL bazasi bilan sinxron ishlash uchun asosiy sinf.
+    Ichkarida `psycopg2.pool.ThreadedConnectionPool` orqali ulanishlar hovuzini (connection pool) boshqaradi.
+    Katta yuklamalarda ham qotib qolmaslik uchun mo'ljallangan.
+    """
 
-    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432) -> None:
-        self.connection = psycopg2.connect(
+    def __init__(
+            self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432,
+            minconn: int = 1, maxconn: int = 20, echo: bool = False
+    ) -> None:
+        self.echo = echo
+        self.pool = pool.ThreadedConnectionPool(
+            minconn, maxconn,
             database=database, user=user, password=password, host=host, port=port
         )
+        self._local = threading.local()
 
     def _manager(
             self,
@@ -21,6 +37,9 @@ class PostgresDB:
             fetchmany: int | None = None
     ) -> Any:
 
+        if self.echo:
+            print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
+
         if not sql or not sql.strip():
             raise ValueError("SQL query cannot be empty")
         if fetchone and fetchall:
@@ -28,28 +47,37 @@ class PostgresDB:
         if many and (fetchone or fetchall or fetchmany):
             raise ValueError("cannot use fetchone/fetchall/fetchmany with many=True")
 
-        with self.connection.cursor() as cursor:
-            if many:
-                cursor.executemany(sql, params)
-                result = None
-            else:
-                cursor.execute(sql, params)
-                if fetchone:
-                    result = cursor.fetchone()
-                elif fetchall:
-                    result = cursor.fetchall()
-                elif fetchmany is not None:
-                    result = cursor.fetchmany(fetchmany)
-                else:
+        in_transaction = getattr(self._local, "conn", None) is not None
+        conn = self._local.conn if in_transaction else self.pool.getconn()
+        
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                if many:
+                    cursor.executemany(sql, params)
                     result = None
+                else:
+                    cursor.execute(sql, params)
+                    if fetchone:
+                        result = cursor.fetchone()
+                    elif fetchall:
+                        result = cursor.fetchall()
+                    elif fetchmany is not None:
+                        result = cursor.fetchmany(fetchmany)
+                    else:
+                        result = None
 
-            if commit:
-                self.connection.commit()
+                if commit and not in_transaction:
+                    conn.commit()
 
-        return result
+            return result
+        finally:
+            if not in_transaction:
+                self.pool.putconn(conn)
 
     def close(self) -> None:
-        self.connection.close()
+        if self.pool:
+            self.pool.closeall()
+            self.pool = None
 
     def raw(
             self,
@@ -141,6 +169,30 @@ class PostgresDB:
                     raise ValueError(f"Noma'lum operator: {op}")
 
             return " AND ".join(clauses), params
+
+        if isinstance(where, Q):
+            if not where.children and not where.conditions:
+                return "", []
+
+            clauses = []
+            params = []
+
+            if where.conditions:
+                condition_sql, condition_params = self._build_where(where.conditions)
+                if condition_sql:
+                    clauses.append(f"({condition_sql})")
+                    params.extend(condition_params)
+
+            for child in where.children:
+                child_sql, child_params = self._build_where(child)
+                if child_sql:
+                    clauses.append(f"({child_sql})")
+                    params.extend(child_params)
+
+            if where.connector == "NOT":
+                return f"NOT ({clauses[0]})", params
+            
+            return f" {where.connector} ".join(clauses), params
 
         if isinstance(where, list):
             clauses = []
@@ -257,7 +309,7 @@ class PostgresDB:
 
         if returning:
             sql += f" RETURNING {returning}"
-            return self._manager(sql, values, fetchone=True)
+            return self._manager(sql, values, fetchone=True, commit=True)
 
         self._manager(sql, values, commit=True)
 
@@ -286,17 +338,25 @@ class PostgresDB:
 
         for key, value in data.items():
             key = self._validate_identifier(key, "column")
-            set_parts.append(f"{key} = %s")
-            params.append(value)
+            if isinstance(value, FExpression):
+                set_parts.append(f"{key} = {value.name} {value.operator} %s")
+                params.append(value.value)
+            else:
+                set_parts.append(f"{key} = %s")
+                params.append(value)
 
         params.append(where_value)
 
         sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_column} = %s"
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql, tuple(params))
-            affected_rows = cursor.rowcount
-            self.connection.commit()
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, tuple(params))
+                affected_rows = cursor.rowcount
+                conn.commit()
+        finally:
+            self.pool.putconn(conn)
 
         return affected_rows
 
@@ -314,8 +374,12 @@ class PostgresDB:
 
         for key, value in data.items():
             key = self._validate_identifier(key, "column")
-            set_parts.append(f"{key} = %s")
-            params.append(value)
+            if isinstance(value, FExpression):
+                set_parts.append(f"{key} = {value.name} {value.operator} %s")
+                params.append(value.value)
+            else:
+                set_parts.append(f"{key} = %s")
+                params.append(value)
 
         where_sql, where_params = self._build_where(where)
         if not where_sql:
@@ -324,10 +388,14 @@ class PostgresDB:
         sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
         params.extend(where_params)
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql, tuple(params))
-            affected_rows = cursor.rowcount
-            self.connection.commit()
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, tuple(params))
+                affected_rows = cursor.rowcount
+                conn.commit()
+        finally:
+            self.pool.putconn(conn)
 
         return affected_rows
 
@@ -348,10 +416,14 @@ class PostgresDB:
 
         sql = f"DELETE FROM {table} WHERE {where_sql}"
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(sql, tuple(where_params))
-            affected_rows = cursor.rowcount
-            self.connection.commit()
+        conn = self.pool.getconn()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(sql, tuple(where_params))
+                affected_rows = cursor.rowcount
+                conn.commit()
+        finally:
+            self.pool.putconn(conn)
 
         return affected_rows
 
@@ -411,3 +483,18 @@ class PostgresDB:
     def alter(self, table: str, action: str) -> Any:
         sql = f"ALTER TABLE {table} {action}"
         return self._manager(sql, commit=True)
+        
+    @contextmanager
+    def transaction(self):
+        conn = self.pool.getconn()
+        self._local.conn = conn
+        try:
+            with conn:                                                                 
+                yield conn
+        finally:
+            self._local.conn = None
+            self.pool.putconn(conn)
+        
+    def close_pool(self):
+        if self.pool:
+            self.pool.closeall()

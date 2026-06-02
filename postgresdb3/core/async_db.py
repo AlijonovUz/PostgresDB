@@ -1,33 +1,67 @@
 import asyncpg
+import asyncio
 from typing import Any, List, Optional
+from postgresdb3.orm.expressions import Q, FExpression
+from contextlib import asynccontextmanager
+import contextvars
+
+_async_conn = contextvars.ContextVar("async_conn", default=None)
 
 
 class AsyncPostgresDB:
-    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432) -> None:
+    """
+    PostgreSQL bazasi bilan asinxron (async/await) ishlash uchun asosiy sinf.
+    Ichkarida `asyncpg.pool.Pool` orqali ulanishlar hovuzini (connection pool) boshqaradi.
+    """
+    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432, min_size: int = 1, max_size: int = 20, echo: bool = False) -> None:
         self.database = database
         self.user = user
         self.password = password
         self.host = host
         self.port = port
+        self.min_size = min_size
+        self.max_size = max_size
+        self.echo = echo
         self.pool: Optional[asyncpg.pool.Pool] = None
+        self._pool_lock = None
+        self._async_conn = contextvars.ContextVar(f"async_conn_{id(self)}", default=None)
 
-    async def _manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False) -> Any:
+    async def _manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False, many=False) -> Any:
+        if self.echo:
+            print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
         if not self.pool:
-            self.pool = await asyncpg.create_pool(
-                database=self.database,
-                user=self.user,
-                password=self.password,
-                host=self.host,
-                port=self.port
-            )
+            if self._pool_lock is None:
+                self._pool_lock = asyncio.Lock()
+            async with self._pool_lock:
+                if not self.pool:
+                    self.pool = await asyncpg.create_pool(
+                        database=self.database,
+                        user=self.user,
+                        password=self.password,
+                        host=self.host,
+                        port=self.port,
+                        min_size=self.min_size,
+                        max_size=self.max_size
+                    )
 
-        async with self.pool.acquire() as conn:
+        conn = self._async_conn.get()
+        is_transaction = conn is not None
+        
+        if not is_transaction:
+            conn = await self.pool.acquire()
+
+        try:
             if commit:
+                if many:
+                    return await conn.executemany(sql, params[0])
                 return await conn.execute(sql, *params)
             if fetchone:
                 return await conn.fetchrow(sql, *params)
             if fetchall:
                 return await conn.fetch(sql, *params)
+        finally:
+            if not is_transaction:
+                await self.pool.release(conn)
 
     async def close_pool(self) -> None:
         if self.pool:
@@ -133,6 +167,33 @@ class AsyncPostgresDB:
                     raise ValueError(f"Noma'lum operator: {op}")
 
             return " AND ".join(clauses), params
+
+        if isinstance(where, Q):
+            if not where.children and not where.conditions:
+                return "", []
+
+            clauses = []
+            params = []
+            index = start_index
+
+            if where.conditions:
+                condition_sql, condition_params = self._build_where(where.conditions, index)
+                if condition_sql:
+                    clauses.append(f"({condition_sql})")
+                    params.extend(condition_params)
+                    index += len(condition_params)
+
+            for child in where.children:
+                child_sql, child_params = self._build_where(child, index)
+                if child_sql:
+                    clauses.append(f"({child_sql})")
+                    params.extend(child_params)
+                    index += len(child_params)
+
+            if where.connector == "NOT":
+                return f"NOT ({clauses[0]})", params
+            
+            return f" {where.connector} ".join(clauses), params
 
         if isinstance(where, list):
             clauses = []
@@ -263,8 +324,12 @@ class AsyncPostgresDB:
 
         for key, value in data.items():
             key = self._validate_identifier(key, "column")
-            set_parts.append(f"{key} = ${index}")
-            params.append(value)
+            if isinstance(value, FExpression):
+                set_parts.append(f"{key} = {value.name} {value.operator} ${index}")
+                params.append(value.value)
+            else:
+                set_parts.append(f"{key} = ${index}")
+                params.append(value)
             index += 1
 
         sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_column} = ${index}"
@@ -288,8 +353,12 @@ class AsyncPostgresDB:
 
         for key, value in data.items():
             key = self._validate_identifier(key, "column")
-            set_parts.append(f"{key} = ${index}")
-            params.append(value)
+            if isinstance(value, FExpression):
+                set_parts.append(f"{key} = {value.name} {value.operator} ${index}")
+                params.append(value.value)
+            else:
+                set_parts.append(f"{key} = ${index}")
+                params.append(value)
             index += 1
 
         where_sql, where_params = self._build_where(where, start_index=index)
@@ -387,3 +456,29 @@ class AsyncPostgresDB:
     async def alter(self, table: str, action: str) -> None:
         sql = f"ALTER TABLE {table} {action}"
         await self._manager(sql, commit=True)
+        
+    @asynccontextmanager
+    async def transaction(self):
+        if not self.pool:
+            if self._pool_lock is None:
+                self._pool_lock = asyncio.Lock()
+            async with self._pool_lock:
+                if not self.pool:
+                    self.pool = await asyncpg.create_pool(
+                        database=self.database,
+                        user=self.user,
+                        password=self.password,
+                        host=self.host,
+                        port=self.port,
+                        min_size=self.min_size,
+                        max_size=self.max_size
+                    )
+        
+        conn = await self.pool.acquire()
+        token = self._async_conn.set(conn)
+        try:
+            async with conn.transaction():
+                yield conn
+        finally:
+            self._async_conn.reset(token)
+            await self.pool.release(conn)
