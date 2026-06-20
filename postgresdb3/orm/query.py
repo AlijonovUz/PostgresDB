@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import TypeVar, Generic
+from postgresdb3.orm.expressions import Q
 
 T = TypeVar('T')
 
@@ -27,8 +28,8 @@ class QuerySet:
 
     def _clone(self):
         qs = self.__class__(self.model)
-        qs._where = dict(self._where) if self._where else None
-        qs._exclude = dict(self._exclude) if self._exclude else None
+        qs._where = list(self._where) if self._where else None
+        qs._exclude = list(self._exclude) if self._exclude else None
         qs._order_by = self._order_by
         qs._limit = self._limit
         qs._offset = self._offset
@@ -409,15 +410,15 @@ class QuerySet:
         if not kwargs:
             return 0
         where = self._build_where()
-        if not where:
+        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
             raise ValueError("Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)")
-        return self.model.db.update_where(self.model.table, kwargs, where=self._where)
+        return self.model.db.update_where(self.model.table, kwargs, where=where)
 
     def delete(self):
         where = self._build_where()
-        if not where:
+        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
             raise ValueError("Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)")
-        return self.model.db.delete_where(self.model.table, where=self._where)
+        return self.model.db.delete_where(self.model.table, where=where)
 
     def count(self):
         where = self._build_where()
@@ -512,8 +513,8 @@ class AsyncQuerySet:
 
     def _clone(self):
         qs = self.__class__(self.model)
-        qs._where = dict(self._where) if self._where else None
-        qs._exclude = dict(self._exclude) if self._exclude else None
+        qs._where = list(self._where) if self._where else None
+        qs._exclude = list(self._exclude) if self._exclude else None
         qs._order_by = self._order_by
         qs._limit = self._limit
         qs._offset = self._offset
@@ -869,15 +870,15 @@ class AsyncQuerySet:
         if not kwargs:
             return 0
         where = self._build_where()
-        if not where:
+        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
             raise ValueError("Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)")
-        return await self.model.db.update_where(self.model.table, kwargs, where=self._where)
+        return await self.model.db.update_where(self.model.table, kwargs, where=where)
 
     async def delete(self):
         where = self._build_where()
-        if not where:
+        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
             raise ValueError("Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)")
-        return await self.model.db.delete_where(self.model.table, where=self._where)
+        return await self.model.db.delete_where(self.model.table, where=where)
 
     async def last(self):
         pk_name = self.model.get_pk_name()
