@@ -16,7 +16,19 @@ pip install postgresdb3
 
 ---
 
-## 🚀 Tezkor Boshlash
+## 🚀 Yangi (v2.0) Imkoniyatlari
+
+Ushbu "Enterprise" versiyada loyihaga quyidagi gigant imkoniyatlar qo'shildi:
+- **`values()` va `values_list()`** - Xotirani tejash uchun to'g'ridan to'g'ri `dict` yoki `list` qaytarish.
+- **`get_or_create()` va `update_or_create()`** - Kodlarni sezilarli darajada qisqartirish.
+- **`__` orqali Auto-Join** - Munosabatlarni avtomatik bog'lash (Masalan: `filter(user__profile__age__gt=18)`).
+- **Mavhum Modellar (Abstract Models)** - Qayta-qayta kod yozmaslik uchun `class Meta: abstract = True`.
+- **`annotate()` va `aggregate()`** - Murakkab matematik va guruhlash amallari.
+- **`update()` va `delete()` (Ommaviy)** - Obyektlarni bazada bitta qatorda ommaviy tahrirlash yoki o'chirish.
+
+---
+
+## ⚡ Tezkor Boshlash
 
 PostgresDB3 bir vaqtning o'zida ikkita dunyoni qo'llab-quvvatlaydi. Xohlasangiz **Sinxron**, xohlasangiz **Asinxron** loyihalarda bir xil sintaksis bilan ishlay olasiz.
 
@@ -33,101 +45,68 @@ db_async = AsyncPostgresDB("my_db", "user", "password", host="localhost", port=5
 ```
 *(Eslatma: `echo=True` yoqilsa, barcha bajarilayotgan SQL so'rovlar terminalda ko'rinib turadi, bu debug uchun juda foydali).*
 
-### 2. Modellarni Yaratish
+### 2. Modellarni Yaratish (Abstract Model namunasida)
 
 ```python
 from postgresdb3.orm.models import Model, AsyncModel
-from postgresdb3 import String, Integer, Float
+from postgresdb3 import String, Integer, Float, Timestamp
 
-# Sinxron model
 Model.db = db_sync
 
-class User(Model):
+class TimestampedModel(Model):
+    class Meta:
+        abstract = True # Jadval yaratilmaydi
+        
+    created_at = Timestamp(auto_now_add=True)
+
+class User(TimestampedModel):
     name = String(length=50)
     age = Integer(default=18)
     score = Float(default=0.0)
-
-# Asinxron model
-AsyncModel.db = db_async
-
-class AsyncUser(AsyncModel):
-    name = String(length=50)
-    age = Integer(default=18)
-    score = Float(default=0.0)
-
-    # Qo'shimcha sozlamalar (Murakkab Indekslar)
+    
     class Meta:
         unique_together = (("name", "age"),) # Ism va yosh bir xil takrorlanmasligi kerak
         index_together = (("score",),)       # Qidiruvni tezlashtirish uchun index
 ```
 
-### 3. CRUD (Yaratish, O'qish, Yangilash, O'chirish)
+### 3. CRUD Operatsiyalari
 
-**Sinxron:**
+**Yangi funksiyalar yordamida:**
 ```python
-# Yaratish
-user = User.create(name="Ali", age=25)
+# Yaratish yoki o'qish (Bazada bo'lmasa yaratadi)
+user, created = User.get_or_create(name="Ali", defaults={'age': 25, 'score': 10.0})
 
-# Barchasini olish
-users = User.all()
+# Ommaviy yangilash (Xotirani to'ldirmasdan)
+User.query().filter(age__lt=18).update(score=0.0)
 
-# Qidirish
-user = User.query().filter(name="Ali").first()
-
-# Yangilash
-user.score = 99.5
-user.save()
-
-# O'chirish
-user.delete()
+# Ommaviy o'chirish
+User.query().filter(score=0.0).delete()
 ```
 
-**Asinxron:**
+**Tezkor O'qish (Values & Values List):**
+Agar modellar bilan ishlash shart bo'lmasa va faqat JSON yuborish kerak bo'lsa:
 ```python
-# Yaratish
-user = await AsyncUser.create(name="Vali", age=22)
+users_dict = User.query().values('id', 'name').all()
+# [{'id': 1, 'name': 'Ali'}, {'id': 2, 'name': 'Vali'}]
 
-# Barchasini olish
-users = await AsyncUser.all()
-
-# Qidirish
-user = await AsyncUser.query().filter(name="Vali").first()
-
-# Yangilash
-user.score = 100.0
-await user.save()
-
-# O'chirish
-await user.delete()
-```
-
-### 4. Raw SQL dan Model Olish
-Ba'zida juda murakkab yoki spesifik SQL yozishga to'g'ri keladi. Shunday paytda u oddiy `dict` emas, to'g'ridan to'g'ri Model obyekti bo'lib qaytishi kerak:
-
-```python
-# Sinxron
-users = User.raw_sql("SELECT * FROM users WHERE age > %s", 20)
-print(users[0].name) # Bu Model Obyekti!
-
-# Asinxron
-users = await AsyncUser.raw_sql("SELECT * FROM asyncusers WHERE age > %s", 20)
+names_list = User.query().values_list('name', flat=True).all()
+# ['Ali', 'Vali']
 ```
 
 ---
 
-## 🔄 Migratsiya (Django uslubida)
+## 🔄 Migratsiya Tizimi (CLI)
 
 Siz o'z loyihangiz papkasida bitta `manage.py` yaratib olib, jadvallarni SQL o'qib-o'tirmasdan terminal orqali avtomatik yangilab borishingiz mumkin.
 
-**`manage.py` yaratamiz:**
+**`manage.py`:**
 ```python
 import sys
 from postgresdb3 import execute_from_command_line
-from myapp.models import db_sync  # 1. Sizning bazaga ulangan db obyektingiz
+from myapp.models import db_sync  # Sizning bazaga ulangan db obyektingiz
 
-# 2. DIQQAT: Migratsiya dvigateli modellarni ko'rishi uchun 
-# ularni albatta import qilib qo'yishingiz SHART!
-from myapp.models import User, Post, Tag 
+# Modellar dvigatelga ko'rinishi uchun barchasini import qilish SHART!
+from myapp.models import User, Post 
 
 if __name__ == "__main__":
     execute_from_command_line(db_sync, sys.argv)
@@ -135,78 +114,58 @@ if __name__ == "__main__":
 
 **Terminalda:**
 ```bash
-# 1. Modellar asosida migratsiya faylini tayyorlash
+# Modellar asosida migratsiya faylini tayyorlash
 python manage.py makemigrations initial_setup
 
-# 2. Bazaga jadvallarni qo'shish
+# Bazaga jadvallarni qo'shish
 python manage.py migrate
 
-# 3. Oxirgi migratsiyani bekor qilish va qaytarish (Rollback)
+# Oxirgi migratsiyani bekor qilish va qaytarish (Rollback)
 python manage.py undo
 ```
-*Tizim jadval qo'shish, ustunlarni o'zgartirish va `Meta` klassidagi indekslarni avtomatik o'zi hal qiladi! Xato qilsangiz, `undo` orqali bir soniyada hammasini orqaga qaytara olasiz.*
 
 ---
 
-## 🔍 Murakkab Qidiruv va Filtrlar (Q va F)
+## 🔍 Murakkab Qidiruv va Aloqalar (Relations)
 
-**Q Obyekti (Murakkab shartlar - AND, OR):**
+**Auto-Join (Bog'langan jadvallar bo'ylab o'tish):**
+Qo'lda JOIN yozish o'rniga, qo'shaloq chiziqcha `__` ishlating:
 ```python
-from postgresdb3 import Q
+posts = Post.query().filter(author__name__startswith='A').all()
+```
+
+**Q va F ifodalar (Murakkab shartlar):**
+```python
+from postgresdb3 import Q, F
 
 # OR (|) sharti
-users = User.query().filter(Q(age__gt=20) | Q(name="Ali")).all()
-
-# AND (&) sharti
-users = User.query().filter(Q(age__lt=30) & Q(score__gt=50)).all()
-```
-
-**F Obyekti (Ustunlarni bir-biriga solishtirish yoki yangilash):**
-```python
-from postgresdb3 import F
+User.query().filter(Q(age__gt=20) | Q(name="Ali")).all()
 
 # Yoshiga nisbatan score'i katta bo'lganlarni izlash
-users = User.query().filter(score__gt=F("age")).all()
-
-# Barchaning balini bazaning o'zida +10 ga oshirish
-User.query().update(score=F("score") + 10)
+User.query().filter(score__gt=F("age")).all()
 ```
 
----
-
-## 🔗 Aloqalar (Relations) va N+1 Yechimi
-
-Loyiha `ForeignKey`, `OneToOneField` va `ManyToManyField` kabi turlarni to'liq qo'llab-quvvatlaydi.
-
+**N+1 xatoligini chetlab o'tish (select_related & prefetch_related):**
 ```python
-from postgresdb3 import ForeignKey, ManyToManyField
-
-class Post(Model):
-    title = String(length=100)
-    author = ForeignKey(User, related_name="posts")
-
-class Tag(Model):
-    name = String(length=50)
-    posts = ManyToManyField(Post, related_name="tags")
-```
-
-**N+1 xatoligini chetlab o'tish:**
-Odatda chet el kalitlari bilan ishlaganda ko'plab ortiqcha so'rovlar yuzaga keladi. Bunga qarshi quyidagilardan foydalaning:
-
-```python
-# ForeignKey uchun
+# ForeignKey uchun (1 ta SQL so'rov)
 posts = Post.query().select_related("author").all()
-print(posts[0].author.name) # 1 ta SQL query bilan ish bitadi
 
-# ManyToMany uchun
+# ManyToMany uchun (Optimallashtirilgan yig'ish)
 posts = Post.query().prefetch_related("tags").all()
-for p in posts:
-    print(p.tags) # N+1 muammosi bo'lmaydi
 ```
 
 ---
 
 ## 📊 Katta Ma'lumotlar bilan Ishlash (Bulk & Pagination)
+
+**Sahifalash (Pagination):**
+Foydalanuvchiga ma'lumotlarni qismlab taqdim etish:
+```python
+result = User.query().paginate(page=1, per_page=20)
+print(result['total'])        # Jami elementlar soni
+print(result['has_next'])     # Keyingi sahifa bormi?
+print(result['data'])         # Modellar ro'yxati (20 ta)
+```
 
 **Ommaviy Yozish (Bulk Create):**
 10,000 ta obyekti birma-bir emas, bitta so'rov orqali kiritish:
@@ -215,67 +174,28 @@ users = [User(name=f"U-{i}", age=20) for i in range(10000)]
 User.bulk_create(users)
 ```
 
-**Ommaviy Yangilash (Bulk Update):**
-```python
-users = User.all()
-for u in users:
-    u.age += 1
-User.bulk_update(users, fields=["age"])
-```
-*(Eslatma: Ommaviy amallar to'liq atomar tranzaksiyaga o'ralgan, xatolik chiqsa 100% orqaga qaytadi!)*
-
-**Sahifalash (Pagination):**
-Foydalanuvchiga ma'lumotlarni qismlab (limit/offset bilan avtomatik) taqdim etish:
-```python
-result = User.query().paginate(page=1, per_page=20)
-print(result.total)        # Jami elementlar soni
-print(result.pages)        # Jami sahifalar soni
-print(result.has_next)     # Keyingi sahifa bormi? (True/False)
-print(result.data)         # Modellar ro'yxati (20 ta)
-```
-
 ---
 
-## 🛡 Tranzaksiyalar (Xavfsizlik)
-
-Muhim operatsiyalar (masalan, pul o'tkazish) vaqtida xato yuz bersa, barcha qilingan ishlarni avtomatik bekor qilish (Rollback):
-
-**Sinxron:**
-```python
-with db_sync.transaction():
-    user1.score -= 50
-    user1.save()
-    user2.score += 50
-    user2.save()
-    # Agar shu joyda qandaydir xatolik chiqsa, hech qaysi userning puli yechilmaydi!
-```
-
-**Asinxron:**
-```python
-async with db_async.transaction():
-    user1.score -= 50
-    await user1.save()
-    user2.score += 50
-    await user2.save()
-```
-
----
-
-## 📈 Agregatsiya (Sum, Avg, Min, Max, Count)
+## 📈 Agregatsiya va Annotatsiya (GroupBy)
 
 Baza orqali kalkulyatsiyalarni amalga oshirish:
 
 ```python
-from postgresdb3 import Sum, Avg, Max
+from postgresdb3 import Sum, Avg, Count
 
+# Jami obshiy statiska:
 result = User.query().aggregate(
     total_score=Sum("score"),
-    avg_age=Avg("age"),
-    max_score=Max("score")
+    avg_age=Avg("age")
 )
-print(result) # {'total_score': 1500, 'avg_age': 25, 'max_score': 100}
+# {'total_score': 1500, 'avg_age': 25}
+
+# Guruhlab hisoblash (Masalan: Har bir userning postlari soni):
+users_with_count = User.query().annotate(post_count=Count("posts")).all()
+for u in users_with_count:
+    print(u.name, u.post_count)
 ```
 
 ---
 
-*Ushbu ORM kutubxonasi tezlik va xavfsizlikni birinchi o'ringa qoyuvchi mutaxassislar uchun maxsus qurilgan. Mazza qilib foydalaning!*
+*Ushbu ORM kutubxonasi Python olamidagi ilg'or texnologiyalar yordamida tezlik va barqarorlikni birinchi o'ringa qo'yuvchi mutaxassislar uchun maxsus qurilgan.*

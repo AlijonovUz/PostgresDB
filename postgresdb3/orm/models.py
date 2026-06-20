@@ -73,6 +73,10 @@ class Model(BaseModel, metaclass=ModelMeta):
         return cls.query().offset(value)
 
     @classmethod
+    def paginate(cls, page: int = 1, per_page: int = 10):
+        return cls.query().paginate(page, per_page)
+
+    @classmethod
     def columns(cls, value):
         return cls.query().columns(value)
 
@@ -85,12 +89,24 @@ class Model(BaseModel, metaclass=ModelMeta):
         return cls.query().group_by(value)
 
     @classmethod
+    def annotate(cls, **kwargs):
+        return cls.query().annotate(**kwargs)
+
+    @classmethod
     def exclude(cls, **kwargs):
         return cls.query().exclude(**kwargs)
 
     @classmethod
     def count(cls):
         return cls.query().count()
+
+    @classmethod
+    def values(cls, *fields):
+        return cls.query().values(*fields)
+
+    @classmethod
+    def values_list(cls, *fields, flat=False):
+        return cls.query().values_list(*fields, flat=flat)
 
     @classmethod
     def exists(cls):
@@ -114,6 +130,14 @@ class Model(BaseModel, metaclass=ModelMeta):
         record = cls.db.insert(cls.table, columns, values, returning="*")
         return cls._from_record(record)
         
+    @classmethod
+    def get_or_create(cls, defaults=None, **kwargs):
+        return cls.query().get_or_create(defaults=defaults, **kwargs)
+
+    @classmethod
+    def update_or_create(cls, defaults=None, **kwargs):
+        return cls.query().update_or_create(defaults=defaults, **kwargs)
+
     @classmethod
     def bulk_create(cls, instances: list["Model"]) -> None:
         if not instances:
@@ -151,8 +175,21 @@ class Model(BaseModel, metaclass=ModelMeta):
         with cls.db.transaction():
             cls.db._manager(sql, values_list, commit=True, many=True)
 
+    def clean(self):
+        for field_name, field in self.__class__._fields.items():
+            value = getattr(self, field_name, None)
+            if hasattr(field, 'validate'):
+                setattr(self, field_name, field.validate(value))
+
+    def before_save(self): pass
+    def after_save(self, created: bool): pass
+    def before_delete(self): pass
+    def after_delete(self): pass
+
     def save(self):
         self.__class__._check_setup()
+        self.clean()
+        self.before_save()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -165,6 +202,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             created = self.__class__.create(**data)
             for field_name in self.__class__._fields:
                 setattr(self, field_name, getattr(created, field_name, None))
+            self.after_save(created=True)
             return self
 
         data = {}
@@ -180,6 +218,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             pk_value
         )
 
+        self.after_save(created=False)
         return self
 
     def update(self, **kwargs):
@@ -208,6 +247,7 @@ class Model(BaseModel, metaclass=ModelMeta):
 
     def delete(self):
         self.__class__._check_setup()
+        self.before_delete()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -216,6 +256,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             raise ValueError(f"{pk_name} qiymati yo'q, o'chirib bo'lmaydi")
 
         self.__class__.db.delete(self.__class__.table, pk_name, pk_value)
+        self.after_delete()
         return True
 
 
@@ -290,6 +331,10 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         return cls.query().offset(value)
 
     @classmethod
+    async def paginate(cls, page: int = 1, per_page: int = 10):
+        return await cls.query().paginate(page, per_page)
+
+    @classmethod
     def columns(cls, value):
         return cls.query().columns(value)
 
@@ -302,12 +347,24 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         return cls.query().group_by(value)
 
     @classmethod
+    def annotate(cls, **kwargs):
+        return cls.query().annotate(**kwargs)
+
+    @classmethod
     def exclude(cls, *args, **kwargs):
         return cls.query().exclude(*args, **kwargs)
 
     @classmethod
     def count(cls):
         return cls.query().count()
+
+    @classmethod
+    def values(cls, *fields):
+        return cls.query().values(*fields)
+
+    @classmethod
+    def values_list(cls, *fields, flat=False):
+        return cls.query().values_list(*fields, flat=flat)
 
     @classmethod
     def exists(cls):
@@ -329,6 +386,14 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         record = await cls.db.insert(cls.table, columns, values, returning="*")
         
         return cls._from_record(record)
+        
+    @classmethod
+    async def get_or_create(cls, defaults=None, **kwargs):
+        return await cls.query().get_or_create(defaults=defaults, **kwargs)
+
+    @classmethod
+    async def update_or_create(cls, defaults=None, **kwargs):
+        return await cls.query().update_or_create(defaults=defaults, **kwargs)
         
     @classmethod
     async def bulk_create(cls, instances: list["AsyncModel"]) -> None:
@@ -367,8 +432,21 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         async with cls.db.transaction():
             await cls.db._manager(sql, values_list, commit=True, many=True)
 
+    async def clean(self):
+        for field_name, field in self.__class__._fields.items():
+            value = getattr(self, field_name, None)
+            if hasattr(field, 'validate'):
+                setattr(self, field_name, field.validate(value))
+
+    async def before_save(self): pass
+    async def after_save(self, created: bool): pass
+    async def before_delete(self): pass
+    async def after_delete(self): pass
+
     async def save(self):
         self.__class__._check_setup()
+        await self.clean()
+        await self.before_save()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -381,6 +459,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             created = await self.__class__.create(**data)
             for field_name in self.__class__._fields:
                 setattr(self, field_name, getattr(created, field_name, None))
+            await self.after_save(created=True)
             return self
 
         data = {}
@@ -396,6 +475,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             pk_value
         )
 
+        await self.after_save(created=False)
         return self
 
     async def update(self, **kwargs):
@@ -424,6 +504,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
     async def delete(self):
         self.__class__._check_setup()
+        await self.before_delete()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -432,4 +513,5 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             raise ValueError(f"{pk_name} qiymati yo'q, o'chirib bo'lmaydi")
 
         await self.__class__.db.delete(self.__class__.table, pk_name, pk_value)
+        await self.after_delete()
         return True

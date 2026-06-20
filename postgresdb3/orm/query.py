@@ -118,6 +118,41 @@ class QuerySet:
         qs._prefetch.extend(fields)
         return qs
 
+    def _process_auto_joins(self, kwargs):
+        new_kwargs = {}
+        for key, value in kwargs.items():
+            parts = key.split("__")
+            
+            if len(parts) >= 2:
+                field_name = parts[0]
+                relation = getattr(self.model, field_name, None)
+                
+                if relation and hasattr(relation, "related_model"):
+                    target_table = relation.related_model.table
+                    source_col = getattr(relation, "field_name", field_name)
+                    target_col = relation.related_model.get_pk_name()
+                    
+                    join_condition = f"{self.model.table}.{source_col} = {target_table}.{target_col}"
+                    
+                    if not self._join:
+                        self._join = []
+                        
+                    join_exists = any(
+                        j[1] == target_table and j[2] == join_condition 
+                        for j in self._join if isinstance(j, tuple) and len(j) == 3
+                    )
+                    
+                    if not join_exists:
+                        self._join.append(("INNER JOIN", target_table, join_condition))
+                    
+                    new_key = f"{target_table}.{'__'.join(parts[1:])}"
+                    new_kwargs[new_key] = value
+                    continue
+                    
+            new_kwargs[key] = value
+            
+        return new_kwargs
+
     def filter(self, *args, **kwargs):
         qs = self._clone()
 
@@ -131,7 +166,7 @@ class QuerySet:
             qs._where.append(arg)
 
         if kwargs:
-            qs._where.append(kwargs)
+            qs._where.append(qs._process_auto_joins(kwargs))
 
         return qs
 
@@ -144,7 +179,7 @@ class QuerySet:
         if qs._exclude is None:
             qs._exclude = {}
 
-        qs._exclude.update(kwargs)
+        qs._exclude.update(qs._process_auto_joins(kwargs))
         return qs
 
     def order_by(self, value):
@@ -177,19 +212,57 @@ class QuerySet:
         qs._group_by = value
         return qs
 
+    def values(self, *fields):
+        qs = self._clone()
+        if fields:
+            qs._columns = ", ".join(fields)
+        qs._return_type = "dict"
+        return qs
+
+    def values_list(self, *fields, flat=False):
+        qs = self._clone()
+        if fields:
+            qs._columns = ", ".join(fields)
+        qs._return_type = "list"
+        qs._flat = flat
+        return qs
+
     def all(self):
         where = self._build_where()
+        
+        columns = self._columns or "*"
+        group_by = self._group_by
+        
+        if hasattr(self, "_annotations") and self._annotations:
+            if columns == "*":
+                columns = f"{self.model.table}.*"
+            for alias, expression in self._annotations.items():
+                if hasattr(expression, "to_sql"):
+                    columns += f", {expression.to_sql()} AS {alias}"
+                else:
+                    columns += f", {expression} AS {alias}"
+            
+            if not group_by:
+                group_by = f"{self.model.table}.{self.model.get_pk_name()}"
+
         records = self.model.db.select(
             self.model.table,
-            columns=self._columns,
+            columns=columns,
             where=where,
             join=self._join,
-            group_by=self._group_by,
+            group_by=group_by,
             order_by=self._order_by,
             limit=self._limit,
             offset=self._offset,
         )
         
+        if getattr(self, "_return_type", None) == "dict":
+            return records
+        elif getattr(self, "_return_type", None) == "list":
+            if getattr(self, "_flat", False):
+                return [list(r.values())[0] if isinstance(r, dict) else r[0] for r in records]
+            return [tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records]
+            
         instances = self.model._from_records(records)
         
                                             
@@ -294,7 +367,57 @@ class QuerySet:
             fetchone=True,
         )
 
+        if not record:
+            return None
+
+        if getattr(self, "_return_type", None) == "dict":
+            return record
+        elif getattr(self, "_return_type", None) == "list":
+            if getattr(self, "_flat", False):
+                return list(record.values())[0] if isinstance(record, dict) else record[0]
+            return tuple(record.values()) if isinstance(record, dict) else tuple(record)
+
         return self.model._from_record(record)
+
+    def get_or_create(self, defaults=None, **kwargs):
+        qs = self.filter(**kwargs)
+        obj = qs.first()
+        if obj:
+            return obj, False
+            
+        params = kwargs.copy()
+        if defaults:
+            params.update(defaults)
+            
+        return self.model.create(**params), True
+
+    def update_or_create(self, defaults=None, **kwargs):
+        defaults = defaults or {}
+        qs = self.filter(**kwargs)
+        obj = qs.first()
+        if obj:
+            for key, value in defaults.items():
+                setattr(obj, key, value)
+            obj.save()
+            return obj, False
+            
+        params = kwargs.copy()
+        params.update(defaults)
+        return self.model.create(**params), True
+
+    def update(self, **kwargs):
+        if not kwargs:
+            return 0
+        where = self._build_where()
+        if not where:
+            raise ValueError("Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)")
+        return self.model.db.update_where(self.model.table, kwargs, where=self._where)
+
+    def delete(self):
+        where = self._build_where()
+        if not where:
+            raise ValueError("Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)")
+        return self.model.db.delete_where(self.model.table, where=self._where)
 
     def count(self):
         where = self._build_where()
@@ -438,6 +561,41 @@ class AsyncQuerySet:
             where
         )
 
+    def _process_auto_joins(self, kwargs):
+        new_kwargs = {}
+        for key, value in kwargs.items():
+            parts = key.split("__")
+            
+            if len(parts) >= 2:
+                field_name = parts[0]
+                relation = getattr(self.model, field_name, None)
+                
+                if relation and hasattr(relation, "related_model"):
+                    target_table = relation.related_model.table
+                    source_col = getattr(relation, "field_name", field_name)
+                    target_col = relation.related_model.get_pk_name()
+                    
+                    join_condition = f"{self.model.table}.{source_col} = {target_table}.{target_col}"
+                    
+                    if not self._join:
+                        self._join = []
+                        
+                    join_exists = any(
+                        j[1] == target_table and j[2] == join_condition 
+                        for j in self._join if isinstance(j, tuple) and len(j) == 3
+                    )
+                    
+                    if not join_exists:
+                        self._join.append(("INNER JOIN", target_table, join_condition))
+                    
+                    new_key = f"{target_table}.{'__'.join(parts[1:])}"
+                    new_kwargs[new_key] = value
+                    continue
+                    
+            new_kwargs[key] = value
+            
+        return new_kwargs
+
     def filter(self, *args, **kwargs):
         qs = self._clone()
 
@@ -449,8 +607,28 @@ class AsyncQuerySet:
 
         qs._where.extend(args)
         if kwargs:
-            qs._where.append(kwargs)
+            qs._where.append(qs._process_auto_joins(kwargs))
         return qs
+
+    def annotate(self, **kwargs):
+        qs = self._clone()
+        if not hasattr(qs, "_annotations"):
+            qs._annotations = {}
+        qs._annotations.update(kwargs)
+        return qs
+
+    def paginate(self, page: int = 1, per_page: int = 10):
+        total = self.count()
+        offset = (page - 1) * per_page
+        data = self.limit(per_page).offset(offset).all()
+        import math
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": math.ceil(total / per_page) if per_page else 1
+        }
 
     def exclude(self, *args, **kwargs):
         qs = self._clone()
@@ -463,7 +641,7 @@ class AsyncQuerySet:
 
         qs._exclude.extend(args)
         if kwargs:
-            qs._exclude.append(kwargs)
+            qs._exclude.append(qs._process_auto_joins(kwargs))
         return qs
 
     def order_by(self, value):
@@ -522,6 +700,21 @@ class AsyncQuerySet:
         qs._group_by = value
         return qs
 
+    def values(self, *fields):
+        qs = self._clone()
+        if fields:
+            qs._columns = ", ".join(fields)
+        qs._return_type = "dict"
+        return qs
+
+    def values_list(self, *fields, flat=False):
+        qs = self._clone()
+        if fields:
+            qs._columns = ", ".join(fields)
+        qs._return_type = "list"
+        qs._flat = flat
+        return qs
+
     def prefetch_related(self, *fields):
         qs = self._clone()
         if not hasattr(qs, "_prefetch"):
@@ -531,18 +724,41 @@ class AsyncQuerySet:
 
     async def all(self):
         where = self._build_where()
+        
+        columns = self._columns or "*"
+        group_by = self._group_by
+        
+        if hasattr(self, "_annotations") and self._annotations:
+            if columns == "*":
+                columns = f"{self.model.table}.*"
+            for alias, expression in self._annotations.items():
+                if hasattr(expression, "to_sql"):
+                    columns += f", {expression.to_sql()} AS {alias}"
+                else:
+                    columns += f", {expression} AS {alias}"
+            
+            if not group_by:
+                group_by = f"{self.model.table}.{self.model.get_pk_name()}"
+
         records = await self.model.db.select(
             self.model.table,
-            columns=self._columns,
+            columns=columns,
             where=where,
             join=self._join,
-            group_by=self._group_by,
+            group_by=group_by,
             order_by=self._order_by,
             limit=self._limit,
             offset=self._offset,
             fetchone=False,
         )
         
+        if getattr(self, "_return_type", None) == "dict":
+            return records
+        elif getattr(self, "_return_type", None) == "list":
+            if getattr(self, "_flat", False):
+                return [list(r.values())[0] if isinstance(r, dict) else r[0] for r in records]
+            return [tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records]
+            
         instances = self.model._from_records(records)
         
         if hasattr(self, "_prefetch") and self._prefetch and instances:
@@ -610,7 +826,58 @@ class AsyncQuerySet:
             offset=self._offset,
             fetchone=True,
         )
+
+        if not record:
+            return None
+
+        if getattr(self, "_return_type", None) == "dict":
+            return record
+        elif getattr(self, "_return_type", None) == "list":
+            if getattr(self, "_flat", False):
+                return list(record.values())[0] if isinstance(record, dict) else record[0]
+            return tuple(record.values()) if isinstance(record, dict) else tuple(record)
+
         return self.model._from_record(record)
+
+    async def get_or_create(self, defaults=None, **kwargs):
+        qs = self.filter(**kwargs)
+        obj = await qs.first()
+        if obj:
+            return obj, False
+            
+        params = kwargs.copy()
+        if defaults:
+            params.update(defaults)
+            
+        return await self.model.create(**params), True
+
+    async def update_or_create(self, defaults=None, **kwargs):
+        defaults = defaults or {}
+        qs = self.filter(**kwargs)
+        obj = await qs.first()
+        if obj:
+            for key, value in defaults.items():
+                setattr(obj, key, value)
+            await obj.save()
+            return obj, False
+            
+        params = kwargs.copy()
+        params.update(defaults)
+        return await self.model.create(**params), True
+
+    async def update(self, **kwargs):
+        if not kwargs:
+            return 0
+        where = self._build_where()
+        if not where:
+            raise ValueError("Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)")
+        return await self.model.db.update_where(self.model.table, kwargs, where=self._where)
+
+    async def delete(self):
+        where = self._build_where()
+        if not where:
+            raise ValueError("Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)")
+        return await self.model.db.delete_where(self.model.table, where=self._where)
 
     async def last(self):
         pk_name = self.model.get_pk_name()
@@ -668,20 +935,6 @@ class AsyncQuerySet:
         )
         return dict(record) if record else {}
         
-    async def paginate(self, page: int, per_page: int):
-        total = await self.count()
-        pages = (total + per_page - 1) // per_page
-        data = await self.limit(per_page).offset((page - 1) * per_page).all()
-        return PaginationResult(
-            total=total,
-            pages=pages,
-            current_page=page,
-            per_page=per_page,
-            has_next=page < pages,
-            has_prev=page > 1,
-            data=data
-        )
-
     async def exists(self):
         where = self._build_where()
         return await self.model.db.exists_where(

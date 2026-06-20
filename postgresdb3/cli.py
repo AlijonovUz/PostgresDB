@@ -19,6 +19,7 @@ def execute_from_command_line(db, argv=None):
                     
     make_parser = subparsers.add_parser("makemigrations", help="Modellardagi o'zgarishlar asosida yangi migratsiya fayllarini yaratadi")
     make_parser.add_argument("name", nargs="?", default="auto", help="Migratsiya nomi (masalan: initial_setup)")
+    make_parser.add_argument("--no-input", action="store_true", help="O'chirishlar (DROP) bo'lsa ogohlantirmasdan bajarish")
     
              
     subparsers.add_parser("migrate", help="Mavjud migratsiyalarni ma'lumotlar bazasiga qo'llaydi")
@@ -29,19 +30,22 @@ def execute_from_command_line(db, argv=None):
     if args.command == "makemigrations":
         engine = MigrationEngine()
         print(f"'{args.name}' nomli migratsiya yaratilmoqda...")
-        engine.makemigrations(args.name)
+        engine.makemigrations(args.name, interactive=not args.no_input)
         
     elif args.command == "migrate":
         engine = MigrationEngine()
         if isinstance(db, PostgresDB):
             engine.migrate(db)
         elif isinstance(db, AsyncPostgresDB):
-                                                                                   
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
                 asyncio.ensure_future(engine.async_migrate(db))
             else:
-                loop.run_until_complete(engine.async_migrate(db))
+                asyncio.run(engine.async_migrate(db))
         else:
             print("Xato: Noma'lum DB obyekti (PostgresDB yoki AsyncPostgresDB kerak).")
             
@@ -50,11 +54,15 @@ def execute_from_command_line(db, argv=None):
         if isinstance(db, PostgresDB):
             engine.undo_migration(db)
         elif isinstance(db, AsyncPostgresDB):
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
                 asyncio.ensure_future(engine.async_undo_migration(db))
             else:
-                loop.run_until_complete(engine.async_undo_migration(db))
+                asyncio.run(engine.async_undo_migration(db))
         else:
             print("Xato: Noma'lum DB obyekti (PostgresDB yoki AsyncPostgresDB kerak).")
             

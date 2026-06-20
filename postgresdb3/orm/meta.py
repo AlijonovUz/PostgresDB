@@ -34,6 +34,7 @@ class ModelMeta(type):
         if meta_class:
             meta_options["unique_together"] = getattr(meta_class, "unique_together", ())
             meta_options["index_together"] = getattr(meta_class, "index_together", ())
+            meta_options["abstract"] = getattr(meta_class, "abstract", False)
         attrs["_meta_options"] = meta_options
 
         if not attrs.get("table"):
@@ -65,11 +66,14 @@ class ModelMeta(type):
                 related_name = field.related_name or f"{name.lower()}_set"
                 is_o2o = isinstance(field, OneToOneField)
 
-                if not hasattr(field.to, related_name):
-                    if is_async_model:
-                        setattr(field.to, related_name, AsyncReverseRelation(cls, field_name, is_o2o))
-                    else:
-                        setattr(field.to, related_name, ReverseRelation(cls, field_name, is_o2o))
+                if hasattr(field.to, related_name):
+                    raise ValueError(f"'{field.to.__name__}.{related_name}' nomida ziddiyat bor. "
+                                     f"'{name}.{field_name}' maydoniga boshqa 'related_name' bering.")
+                                     
+                if is_async_model:
+                    setattr(field.to, related_name, AsyncReverseRelation(cls, field_name, is_o2o))
+                else:
+                    setattr(field.to, related_name, ReverseRelation(cls, field_name, is_o2o))
             
             elif isinstance(field, ManyToManyField):
                 through_table = f"{cls.table}_{field.to.table}"
@@ -83,6 +87,11 @@ class ModelMeta(type):
                 
                                   
                 related_name = field.related_name or f"{name.lower()}_set"
+                
+                if hasattr(field.to, related_name):
+                    raise ValueError(f"'{field.to.__name__}.{related_name}' nomida ziddiyat bor. "
+                                     f"'{name}.{field_name}' maydoniga boshqa 'related_name' bering.")
+                                     
                 setattr(field.to, related_name, ManyToManyRelation(
                     cls, through_table, target_col, source_col, is_async_model
                 ))
@@ -107,7 +116,8 @@ class ModelMeta(type):
                 M2MThrough.get_pk_name = classmethod(lambda cls: "id")
                 cls._m2m_throughs.append(M2MThrough)
 
-        if name not in ("Model", "AsyncModel") and not attrs.get("is_through_table"):
+        is_abstract = attrs.get("_meta_options", {}).get("abstract", False)
+        if name not in ("Model", "AsyncModel") and not attrs.get("is_through_table") and not is_abstract:
             model_registry.append(cls)
             if hasattr(cls, "_m2m_throughs"):
                 for m2m in cls._m2m_throughs:

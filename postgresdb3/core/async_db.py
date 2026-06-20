@@ -27,9 +27,16 @@ class AsyncPostgresDB:
         self._async_conn = contextvars.ContextVar(f"async_conn_{id(self)}", default=None)
 
     async def _manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False, many=False) -> Any:
-        if "%s" in sql:
-            parts = sql.split("%s")
-            sql = "".join([part + f"${i+1}" for i, part in enumerate(parts[:-1])]) + parts[-1]
+        if params and "%s" in sql:
+            import re
+            counter = 1
+            def repl(match):
+                nonlocal counter
+                res = f"${counter}"
+                counter += 1
+                return res
+            sql = re.sub(r'(?<!%)%s', repl, sql)
+            sql = sql.replace("%%", "%")
             
         if self.echo:
             print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
@@ -103,6 +110,9 @@ class AsyncPostgresDB:
         if not isinstance(columns, str) or not columns.strip():
             raise ValueError("columns noto'g'ri bo'lishi mumkin emas")
 
+        if ";" in columns or "--" in columns:
+            raise ValueError("SQL injection xavfi mavjud: yaroqsiz ustun nomi")
+
         return columns
 
     def _build_where(self, where: Any, start_index: int = 1) -> tuple[str, list]:
@@ -128,6 +138,12 @@ class AsyncPostgresDB:
                 "lte": "<=",
                 "like": "LIKE",
                 "ilike": "ILIKE",
+                "contains": "LIKE",
+                "icontains": "ILIKE",
+                "startswith": "LIKE",
+                "istartswith": "ILIKE",
+                "endswith": "LIKE",
+                "iendswith": "ILIKE",
             }
 
             for key, value in where.items():
@@ -139,6 +155,12 @@ class AsyncPostgresDB:
                 self._validate_identifier(field, "where field")
 
                 if op in operator_map:
+                    if op in ("contains", "icontains"):
+                        value = f"%{value}%"
+                    elif op in ("startswith", "istartswith"):
+                        value = f"{value}%"
+                    elif op in ("endswith", "iendswith"):
+                        value = f"%{value}"
                     clauses.append(f"{field} {operator_map[op]} ${index}")
                     params.append(value)
                     index += 1
@@ -298,18 +320,9 @@ class AsyncPostgresDB:
         if not values_list:
             raise ValueError("values_list bo'sh bo'lishi mumkin emas")
 
-        placeholders_list = []
-        flat_values = []
-        counter = 1
-
-        for values in values_list:
-            placeholders = ", ".join(f"${i}" for i in range(counter, counter + len(values)))
-            placeholders_list.append(f"({placeholders})")
-            flat_values.extend(values)
-            counter += len(values)
-
-        sql = f"INSERT INTO {table} ({columns}) VALUES {', '.join(placeholders_list)}"
-        await self._manager(sql, *flat_values, commit=True)
+        placeholders = ", ".join(f"${i+1}" for i in range(len(values_list[0])))
+        sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+        await self._manager(sql, values_list, commit=True, many=True)
 
     async def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any) -> None:
         sql = f"UPDATE {table} SET {set_column} = $1 WHERE {where_column} = $2"
@@ -463,6 +476,11 @@ class AsyncPostgresDB:
         
     @asynccontextmanager
     async def transaction(self):
+        existing_conn = self._async_conn.get()
+        if existing_conn:
+            yield existing_conn
+            return
+            
         if not self.pool:
             if self._pool_lock is None:
                 self._pool_lock = asyncio.Lock()
@@ -477,7 +495,7 @@ class AsyncPostgresDB:
                         min_size=self.min_size,
                         max_size=self.max_size
                     )
-        
+
         conn = await self.pool.acquire()
         token = self._async_conn.set(conn)
         try:
@@ -486,3 +504,15 @@ class AsyncPostgresDB:
         finally:
             self._async_conn.reset(token)
             await self.pool.release(conn)
+    def atomic(self):
+        """
+        Asinxron funksiyalarni tranzaksiya (transaction) ichida ishlatish uchun dekorator.
+        """
+        def decorator(func):
+            import functools
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                async with self.transaction():
+                    return await func(*args, **kwargs)
+            return wrapper
+        return decorator

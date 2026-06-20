@@ -16,9 +16,10 @@ class PostgresDB:
 
     def __init__(
             self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432,
-            minconn: int = 1, maxconn: int = 20, echo: bool = False
+            minconn: int = 1, maxconn: int = 20, echo: bool = False, ping_connections: bool = False
     ) -> None:
         self.echo = echo
+        self.ping_connections = ping_connections
         self.pool = pool.ThreadedConnectionPool(
             minconn, maxconn,
             database=database, user=user, password=password, host=host, port=port
@@ -48,7 +49,22 @@ class PostgresDB:
             raise ValueError("cannot use fetchone/fetchall/fetchmany with many=True")
 
         in_transaction = getattr(self._local, "conn", None) is not None
-        conn = self._local.conn if in_transaction else self.pool.getconn()
+        
+        if in_transaction:
+            conn = self._local.conn
+        else:
+            while True:
+                conn = self.pool.getconn()
+                if self.ping_connections:
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT 1")
+                        break
+                    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+                        self.pool.putconn(conn, close=True)
+                else:
+                    break
+            conn.autocommit = True
         
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -65,9 +81,6 @@ class PostgresDB:
                         result = cursor.fetchmany(fetchmany)
                     else:
                         result = None
-
-                if commit and not in_transaction:
-                    conn.commit()
 
             return result
         finally:
@@ -133,6 +146,12 @@ class PostgresDB:
                 "lte": "<=",
                 "like": "LIKE",
                 "ilike": "ILIKE",
+                "contains": "LIKE",
+                "icontains": "ILIKE",
+                "startswith": "LIKE",
+                "istartswith": "ILIKE",
+                "endswith": "LIKE",
+                "iendswith": "ILIKE",
             }
 
             for key, value in where.items():
@@ -142,6 +161,12 @@ class PostgresDB:
                     field, op = key, "eq"
 
                 if op in operator_map:
+                    if op in ("contains", "icontains"):
+                        value = f"%{value}%"
+                    elif op in ("startswith", "istartswith"):
+                        value = f"{value}%"
+                    elif op in ("endswith", "iendswith"):
+                        value = f"%{value}"
                     clauses.append(f"{field} {operator_map[op]} %s")
                     params.append(value)
 
@@ -249,6 +274,9 @@ class PostgresDB:
 
         if not isinstance(columns, str) or not columns.strip():
             raise ValueError("columns noto'g'ri bo'lishi mumkin emas")
+
+        if ";" in columns or "--" in columns:
+            raise ValueError("SQL injection xavfi mavjud: yaroqsiz ustun nomi")
 
         return columns
 
@@ -486,7 +514,24 @@ class PostgresDB:
         
     @contextmanager
     def transaction(self):
-        conn = self.pool.getconn()
+        existing_conn = getattr(self._local, "conn", None)
+        if existing_conn:
+            yield existing_conn
+            return
+            
+        while True:
+            conn = self.pool.getconn()
+            if self.ping_connections:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                    break
+                except (psycopg2.InterfaceError, psycopg2.OperationalError):
+                    self.pool.putconn(conn, close=True)
+            else:
+                break
+                
+        conn.autocommit = True
         self._local.conn = conn
         try:
             with conn:                                                                 
@@ -494,6 +539,19 @@ class PostgresDB:
         finally:
             self._local.conn = None
             self.pool.putconn(conn)
+
+    def atomic(self):
+        """
+        Sinxron funksiyalarni tranzaksiya (transaction) ichida ishlatish uchun dekorator.
+        """
+        def decorator(func):
+            import functools
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                with self.transaction():
+                    return func(*args, **kwargs)
+            return wrapper
+        return decorator
         
     def close_pool(self):
         if self.pool:

@@ -18,6 +18,13 @@ class Field:
         self.index = index
         self.name = None
 
+    def validate(self, value):
+        if value is None:
+            if not self.nullable and not self.primary_key and self.default is None:
+                raise ValueError(f"'{self.name}' ustuni bo'sh (NULL) bo'lishi mumkin emas.")
+            return value
+        return value
+
     def to_sql(self):
 
         parts = [self.name, self.sql_type]

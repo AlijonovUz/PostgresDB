@@ -7,7 +7,7 @@ class ForeignKeyRelation:
         if instance is None:
             return self
 
-        fk_value = getattr(instance, self.field_name, None)
+        fk_value = instance.__dict__.get(self.field_name)
         if fk_value is None:
             return None
 
@@ -15,9 +15,12 @@ class ForeignKeyRelation:
 
     def __set__(self, instance, value):
         if value is not None:
-            setattr(instance, self.field_name, getattr(value, value.__class__.get_pk_name()))
+            if hasattr(value.__class__, "get_pk_name"):
+                instance.__dict__[self.field_name] = getattr(value, value.__class__.get_pk_name())
+            else:
+                instance.__dict__[self.field_name] = value
         else:
-            setattr(instance, self.field_name, None)
+            instance.__dict__[self.field_name] = None
 
 
 class ReverseRelation:
@@ -48,7 +51,6 @@ class ReverseRelation:
             return self.related_model.create(**kwargs)
         
         qs.create = create
-        qs.create = create
         return qs
 
     def __set__(self, instance, value):
@@ -64,7 +66,7 @@ class AsyncForeignKeyRelation:
         if instance is None:
             return self
 
-        fk_value = getattr(instance, self.field_name, None)
+        fk_value = instance.__dict__.get(self.field_name)
         if fk_value is None:
             return None
 
@@ -72,9 +74,12 @@ class AsyncForeignKeyRelation:
 
     def __set__(self, instance, value):
         if value is not None:
-            setattr(instance, self.field_name, getattr(value, value.__class__.get_pk_name()))
+            if hasattr(value.__class__, "get_pk_name"):
+                instance.__dict__[self.field_name] = getattr(value, value.__class__.get_pk_name())
+            else:
+                instance.__dict__[self.field_name] = value
         else:
-            setattr(instance, self.field_name, None)
+            instance.__dict__[self.field_name] = None
 
 
 class AsyncReverseRelation:
@@ -93,14 +98,12 @@ class AsyncReverseRelation:
         qs = self.related_model.filter(**{self.fk_name: pk_value})
         
         if self.is_one_to_one:
-            import asyncio
-            return asyncio.create_task(qs.first())
+            return qs.first()
 
         async def create(**kwargs):
             kwargs[self.fk_name] = pk_value
             return await self.related_model.create(**kwargs)
             
-        qs.create = create
         qs.create = create
         return qs
 
@@ -166,28 +169,14 @@ class ManyToManyRelation:
                 placeholders = ", ".join(["%s"] * len(target_ids))
                 sql = f"DELETE FROM {self.through_table} WHERE {self.source_col} = %s AND {self.target_col} IN ({placeholders})"
                 params = [pk_value] + list(target_ids)
-                conn = db.pool.getconn()
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute(sql, tuple(params))
-                        conn.commit()
-                finally:
-                    db.pool.putconn(conn)
-                    
+                db._manager(sql, params, commit=True)
+                
             def clear():
                 sql = f"DELETE FROM {self.through_table} WHERE {self.source_col} = %s"
-                conn = db.pool.getconn()
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute(sql, (pk_value,))
-                        conn.commit()
-                finally:
-                    db.pool.putconn(conn)
-                    
+                db._manager(sql, [pk_value], commit=True)
+                
             qs.add = add
             qs.remove = remove
-            qs.clear = clear
-            
             qs.clear = clear
             
         return qs
