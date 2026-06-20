@@ -240,8 +240,10 @@ class Model(BaseModel, metaclass=ModelMeta):
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
 
-            setattr(self, key, value)
-            self.__class__.db.update(self.__class__.table, key, value, pk_name, pk_value)
+            if not isinstance(value, __import__("postgresdb3.orm.expressions", fromlist=["FExpression"]).FExpression):
+                setattr(self, key, value)
+
+        self.__class__.db.update_fields(self.__class__.table, kwargs, pk_name, pk_value)
 
         return self
 
@@ -497,8 +499,10 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
 
-            setattr(self, key, value)
-            await self.__class__.db.update(self.__class__.table, key, value, pk_name, pk_value)
+            if not isinstance(value, __import__("postgresdb3.orm.expressions", fromlist=["FExpression"]).FExpression):
+                setattr(self, key, value)
+
+        await self.__class__.db.update_fields(self.__class__.table, kwargs, pk_name, pk_value)
 
         return self
 

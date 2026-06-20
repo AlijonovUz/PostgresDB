@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="postgresdb3",
-    version="2.0.1",
+    version="2.0.2",
     packages=find_packages(),
     install_requires=[
         "psycopg2>=2.9",
