@@ -14,6 +14,37 @@ Kutubxonani o'rnatish uchun terminalda quyidagi buyruqni kiriting:
 pip install postgresdb3
 ```
 
+### ⚠️ Linux/macOS tizimlarida o'rnatish va muammolar yechimi
+
+`postgresdb3` ishlashi uchun sinxron ulanishlarda `psycopg2` kutubxonasidan foydalanadi. O'rnatish vaqtida tizimingiz holatidan kelib chiqib, quyidagi ikki variantdan biri avtomatik tanlanadi:
+
+1. **`psycopg2` (Kompilyatsiya qilinadigan variant)**: Agar tizimingizda PostgreSQL ning ishlab chiquvchi kutubxonalari (`pg_config` va `pg_config.h` fayllari, masalan `libpq-dev`) mavjud bo'lsa, kutubxona manbadan (source) kompilyatsiya qilinadi. Bu ishlab chiqarish (production) muhitlari uchun tavsiya etiladi.
+2. **`psycopg2-binary` (Tayyor variant)**: Agar tizimingizda kompilyatsiya qilish uchun kerakli PostgreSQL kutubxonalari topilmasa, o'rnatish jarayoni muvaffaqiyatli yakunlanishi uchun avtomatik ravishda tayyor pre-compiled `psycopg2-binary` o'rnatiladi. Bu lokal dasturlash va test muhitlari uchun juda mos keladi.
+
+#### Tizim kutubxonalarini o'rnatish (Tavsiya etiladi)
+Ishlab chiqarish (production) muhitida toza `psycopg2` (manbadan yig'iladigan) ishlatish tavsiya etiladi. Buning uchun `postgresdb3` ni o'rnatishdan oldin quyidagi tizim paketlarini o'rnatib olishingiz kerak bo'ladi:
+
+* **Debian/Ubuntu:**
+  ```bash
+  sudo apt update
+  sudo apt install python3-dev libpq-dev build-essential
+  ```
+* **RedHat/CentOS/Fedora/Rocky Linux:**
+  ```bash
+  sudo dnf install python3-devel postgresql-devel gcc
+  ```
+* **macOS (Homebrew):**
+  ```bash
+  brew install libpq
+  ```
+
+#### Majburiy kompilyatsiya rejimini yoqish
+Agar siz pre-compiled binary versiyadan mutlaqo foydalanmasdan, toza manbali `psycopg2` ni majburiy ravishda yig'moqchi bo'lsangiz, terminalda quyidagi muhit o'zgaruvchisini (env variable) ko'rsatgan holda o'rnatishni amalga oshiring:
+
+```bash
+POSTGRESDB_SOURCE_PSYCOPG2=1 pip install postgresdb3
+```
+
 ---
 
 ## 🚀 Yangi (v2.0) Imkoniyatlari
