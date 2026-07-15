@@ -47,18 +47,6 @@ POSTGRESDB_SOURCE_PSYCOPG2=1 pip install postgresdb3
 
 ---
 
-## 🚀 Yangi (v2.0) Imkoniyatlari
-
-Ushbu "Enterprise" versiyada loyihaga quyidagi gigant imkoniyatlar qo'shildi:
-- **`values()` va `values_list()`** - Xotirani tejash uchun to'g'ridan to'g'ri `dict` yoki `list` qaytarish.
-- **`get_or_create()` va `update_or_create()`** - Kodlarni sezilarli darajada qisqartirish.
-- **`__` orqali Auto-Join** - Munosabatlarni avtomatik bog'lash (Masalan: `filter(user__profile__age__gt=18)`).
-- **Mavhum Modellar (Abstract Models)** - Qayta-qayta kod yozmaslik uchun `class Meta: abstract = True`.
-- **`annotate()` va `aggregate()`** - Murakkab matematik va guruhlash amallari.
-- **`update()` va `delete()` (Ommaviy)** - Obyektlarni bazada bitta qatorda ommaviy tahrirlash yoki o'chirish.
-
----
-
 ## ⚡ Tezkor Boshlash
 
 PostgresDB3 bir vaqtning o'zida ikkita dunyoni qo'llab-quvvatlaydi. Xohlasangiz **Sinxron**, xohlasangiz **Asinxron** loyihalarda bir xil sintaksis bilan ishlay olasiz.
