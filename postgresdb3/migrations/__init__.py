@@ -2,6 +2,7 @@ import os
 import importlib
 import inspect
 
+
 class MigrationEngine:
     def __init__(self, models_module_path):
         self.models_module_path = models_module_path
@@ -11,10 +12,10 @@ class MigrationEngine:
 
     def makemigrations(self):
         print("Model o'zgarishlari tekshirilmoqda...")
-                                             
+
         pass
 
     def migrate(self, db):
         print("Migratsiyalar bazaga yozilmoqda...")
-                                               
+
         pass

@@ -1,7 +1,7 @@
 import asyncpg
 import asyncio
 from typing import Any, List, Optional
-from postgresdb3.orm.expressions import Q, FExpression
+from postgresdb3.orm.expressions import Q, FExpression, F
 from contextlib import asynccontextmanager
 import contextvars
 
@@ -13,7 +13,18 @@ class AsyncPostgresDB:
     PostgreSQL bazasi bilan asinxron (async/await) ishlash uchun asosiy sinf.
     Ichkarida `asyncpg.pool.Pool` orqali ulanishlar hovuzini (connection pool) boshqaradi.
     """
-    def __init__(self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432, min_size: int = 1, max_size: int = 20, echo: bool = False) -> None:
+
+    def __init__(
+        self,
+        database: str,
+        user: str,
+        password: str,
+        host: str = "localhost",
+        port: int = 5432,
+        min_size: int = 1,
+        max_size: int = 20,
+        echo: bool = False,
+    ) -> None:
         self.database = database
         self.user = user
         self.password = password
@@ -24,20 +35,33 @@ class AsyncPostgresDB:
         self.echo = echo
         self.pool: Optional[asyncpg.pool.Pool] = None
         self._pool_lock = None
-        self._async_conn = contextvars.ContextVar(f"async_conn_{id(self)}", default=None)
+        self._async_conn = contextvars.ContextVar(
+            f"async_conn_{id(self)}", default=None
+        )
 
-    async def _manager(self, sql: str, *params, fetchone=False, fetchall=False, commit=False, many=False) -> Any:
+    async def _manager(
+        self,
+        sql: str,
+        *params,
+        fetchone=False,
+        fetchall=False,
+        commit=False,
+        many=False,
+    ) -> Any:
         if params and "%s" in sql:
             import re
+
             counter = 1
+
             def repl(match):
                 nonlocal counter
                 res = f"${counter}"
                 counter += 1
                 return res
-            sql = re.sub(r'(?<!%)%s', repl, sql)
+
+            sql = re.sub(r"(?<!%)%s", repl, sql)
             sql = sql.replace("%%", "%")
-            
+
         if self.echo:
             print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
         if not self.pool:
@@ -52,12 +76,12 @@ class AsyncPostgresDB:
                         host=self.host,
                         port=self.port,
                         min_size=self.min_size,
-                        max_size=self.max_size
+                        max_size=self.max_size,
                     )
 
         conn = self._async_conn.get()
         is_transaction = conn is not None
-        
+
         if not is_transaction:
             conn = await self.pool.acquire()
 
@@ -80,7 +104,9 @@ class AsyncPostgresDB:
             self.pool = None
 
     async def create(self, table: str, columns: str) -> None:
-        await self._manager(f"CREATE TABLE IF NOT EXISTS {table} ({columns})", commit=True)
+        await self._manager(
+            f"CREATE TABLE IF NOT EXISTS {table} ({columns})", commit=True
+        )
 
     async def drop(self, table: str, cascade: bool = False) -> None:
         sql = f"DROP TABLE IF EXISTS {table}"
@@ -104,7 +130,9 @@ class AsyncPostgresDB:
             if not columns:
                 raise ValueError("columns bo'sh list bo'lmasligi kerak")
 
-            validated_columns = [self._validate_identifier(col, "column") for col in columns]
+            validated_columns = [
+                self._validate_identifier(col, "column") for col in columns
+            ]
             return ", ".join(validated_columns)
 
         if not isinstance(columns, str) or not columns.strip():
@@ -155,30 +183,45 @@ class AsyncPostgresDB:
                 self._validate_identifier(field, "where field")
 
                 if op in operator_map:
-                    if op in ("contains", "icontains"):
-                        value = f"%{value}%"
-                    elif op in ("startswith", "istartswith"):
-                        value = f"{value}%"
-                    elif op in ("endswith", "iendswith"):
-                        value = f"%{value}"
-                    clauses.append(f"{field} {operator_map[op]} ${index}")
-                    params.append(value)
-                    index += 1
+                    if isinstance(value, F):
+                        clauses.append(f"{field} {operator_map[op]} {value.name}")
+                    elif isinstance(value, FExpression):
+                        clauses.append(f"{field} {operator_map[op]} {value.name} {value.operator} ${index}")
+                        params.append(value.value)
+                        index += 1
+                    else:
+                        if op in ("contains", "icontains"):
+                            value = f"%{value}%"
+                        elif op in ("startswith", "istartswith"):
+                            value = f"{value}%"
+                        elif op in ("endswith", "iendswith"):
+                            value = f"%{value}"
+                        clauses.append(f"{field} {operator_map[op]} ${index}")
+                        params.append(value)
+                        index += 1
 
                 elif op == "in":
                     if not isinstance(value, (list, tuple)) or not value:
-                        raise ValueError(f"{field}__in uchun bo'sh bo'lmagan list/tuple kerak")
+                        raise ValueError(
+                            f"{field}__in uchun bo'sh bo'lmagan list/tuple kerak"
+                        )
 
-                    placeholders = ", ".join(f"${i}" for i in range(index, index + len(value)))
+                    placeholders = ", ".join(
+                        f"${i}" for i in range(index, index + len(value))
+                    )
                     clauses.append(f"{field} IN ({placeholders})")
                     params.extend(value)
                     index += len(value)
 
                 elif op == "not_in":
                     if not isinstance(value, (list, tuple)) or not value:
-                        raise ValueError(f"{field}__not_in uchun bo'sh bo'lmagan list/tuple kerak")
+                        raise ValueError(
+                            f"{field}__not_in uchun bo'sh bo'lmagan list/tuple kerak"
+                        )
 
-                    placeholders = ", ".join(f"${i}" for i in range(index, index + len(value)))
+                    placeholders = ", ".join(
+                        f"${i}" for i in range(index, index + len(value))
+                    )
                     clauses.append(f"{field} NOT IN ({placeholders})")
                     params.extend(value)
                     index += len(value)
@@ -203,7 +246,9 @@ class AsyncPostgresDB:
             index = start_index
 
             if where.conditions:
-                condition_sql, condition_params = self._build_where(where.conditions, index)
+                condition_sql, condition_params = self._build_where(
+                    where.conditions, index
+                )
                 if condition_sql:
                     clauses.append(f"({condition_sql})")
                     params.extend(condition_params)
@@ -218,7 +263,7 @@ class AsyncPostgresDB:
 
             if where.connector == "NOT":
                 return f"NOT ({clauses[0]})", params
-            
+
             return f" {where.connector} ".join(clauses), params
 
         if isinstance(where, list):
@@ -228,7 +273,9 @@ class AsyncPostgresDB:
 
             for item in where:
                 if len(item) != 3:
-                    raise ValueError("List formatidagi where elementlari (field, operator, value) bo'lishi kerak")
+                    raise ValueError(
+                        "List formatidagi where elementlari (field, operator, value) bo'lishi kerak"
+                    )
 
                 field, operator, value = item
                 self._validate_identifier(field, "where field")
@@ -241,9 +288,13 @@ class AsyncPostgresDB:
 
                 elif op in {"IN", "NOT IN"}:
                     if not isinstance(value, (list, tuple)) or not value:
-                        raise ValueError(f"{field} {op} uchun bo'sh bo'lmagan list/tuple kerak")
+                        raise ValueError(
+                            f"{field} {op} uchun bo'sh bo'lmagan list/tuple kerak"
+                        )
 
-                    placeholders = ", ".join(f"${i}" for i in range(index, index + len(value)))
+                    placeholders = ", ".join(
+                        f"${i}" for i in range(index, index + len(value))
+                    )
                     clauses.append(f"{field} {op} ({placeholders})")
                     params.extend(value)
                     index += len(value)
@@ -262,16 +313,17 @@ class AsyncPostgresDB:
         raise TypeError("where tuple, dict yoki list bo'lishi kerak")
 
     async def select(
-            self,
-            table: str,
-            columns: str | list[str] = "*",
-            where: tuple | dict | list | None = None,
-            join: Optional[List[tuple]] = None,
-            group_by: Optional[str] = None,
-            order_by: Optional[str] = None,
-            limit: Optional[int] = None,
-            offset: Optional[int] = None,
-            fetchone: bool = False
+        self,
+        table: str,
+        columns: str | list[str] = "*",
+        where: tuple | dict | list | None = None,
+        join: Optional[List[tuple]] = None,
+        group_by: Optional[str] = None,
+        order_by: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        fetchone: bool = False,
+        for_update: bool = False,
     ) -> Any:
         table = self._validate_identifier(table, "table")
         columns = self._normalize_columns(columns)
@@ -304,9 +356,16 @@ class AsyncPostgresDB:
             sql += f" OFFSET ${len(params) + 1}"
             params.append(offset)
 
-        return await self._manager(sql, *params, fetchone=fetchone, fetchall=not fetchone)
+        if for_update:
+            sql += " FOR UPDATE"
 
-    async def insert(self, table: str, columns: str, values: list, returning: str | None = None):
+        return await self._manager(
+            sql, *params, fetchone=fetchone, fetchall=not fetchone
+        )
+
+    async def insert(
+        self, table: str, columns: str, values: list, returning: str | None = None
+    ):
         placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
 
@@ -316,7 +375,9 @@ class AsyncPostgresDB:
 
         await self._manager(sql, *values, commit=True)
 
-    async def insert_many(self, table: str, columns: str, values_list: List[List[Any]]) -> None:
+    async def insert_many(
+        self, table: str, columns: str, values_list: List[List[Any]]
+    ) -> None:
         if not values_list:
             raise ValueError("values_list bo'sh bo'lishi mumkin emas")
 
@@ -324,11 +385,20 @@ class AsyncPostgresDB:
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
         await self._manager(sql, values_list, commit=True, many=True)
 
-    async def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any) -> None:
+    async def update(
+        self,
+        table: str,
+        set_column: str,
+        set_value: Any,
+        where_column: str,
+        where_value: Any,
+    ) -> None:
         sql = f"UPDATE {table} SET {set_column} = $1 WHERE {where_column} = $2"
         await self._manager(sql, set_value, where_value, commit=True)
 
-    async def update_fields(self, table: str, data: dict, where_column: str, where_value: Any) -> int:
+    async def update_fields(
+        self, table: str, data: dict, where_column: str, where_value: Any
+    ) -> int:
         table = self._validate_identifier(table, "table")
         where_column = self._validate_identifier(where_column, "where column")
 
@@ -349,13 +419,17 @@ class AsyncPostgresDB:
                 params.append(value)
             index += 1
 
-        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_column} = ${index}"
+        sql = (
+            f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_column} = ${index}"
+        )
         params.append(where_value)
 
         result = await self._manager(sql, *params, commit=True)
         return int(result.split()[-1])
 
-    async def update_where(self, table: str, data: dict, where: tuple | dict | list) -> int:
+    async def update_where(
+        self, table: str, data: dict, where: tuple | dict | list
+    ) -> int:
         table = self._validate_identifier(table, "table")
 
         if not data:
@@ -385,11 +459,7 @@ class AsyncPostgresDB:
 
         sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
 
-        result = await self._manager(
-            sql,
-            *(params + where_params),
-            commit=True
-        )
+        result = await self._manager(sql, *(params + where_params), commit=True)
 
         return int(result.split()[-1])
 
@@ -410,20 +480,16 @@ class AsyncPostgresDB:
 
         sql = f"DELETE FROM {table} WHERE {where_sql}"
 
-        result = await self._manager(
-            sql,
-            *where_params,
-            commit=True
-        )
+        result = await self._manager(sql, *where_params, commit=True)
 
         return int(result.split()[-1])
 
     async def exists_where(
-            self,
-            table: str,
-            where: tuple | dict | list | None = None,
-            join: list[tuple] | None = None,
-            group_by: str | None = None,
+        self,
+        table: str,
+        where: tuple | dict | list | None = None,
+        join: list[tuple] | None = None,
+        group_by: str | None = None,
     ) -> bool:
         table = self._validate_identifier(table, "table")
 
@@ -473,14 +539,14 @@ class AsyncPostgresDB:
     async def alter(self, table: str, action: str) -> None:
         sql = f"ALTER TABLE {table} {action}"
         await self._manager(sql, commit=True)
-        
+
     @asynccontextmanager
     async def transaction(self):
         existing_conn = self._async_conn.get()
         if existing_conn:
             yield existing_conn
             return
-            
+
         if not self.pool:
             if self._pool_lock is None:
                 self._pool_lock = asyncio.Lock()
@@ -493,7 +559,7 @@ class AsyncPostgresDB:
                         host=self.host,
                         port=self.port,
                         min_size=self.min_size,
-                        max_size=self.max_size
+                        max_size=self.max_size,
                     )
 
         conn = await self.pool.acquire()
@@ -504,15 +570,20 @@ class AsyncPostgresDB:
         finally:
             self._async_conn.reset(token)
             await self.pool.release(conn)
+
     def atomic(self):
         """
         Asinxron funksiyalarni tranzaksiya (transaction) ichida ishlatish uchun dekorator.
         """
+
         def decorator(func):
             import functools
+
             @functools.wraps(func)
             async def wrapper(*args, **kwargs):
                 async with self.transaction():
                     return await func(*args, **kwargs)
+
             return wrapper
+
         return decorator

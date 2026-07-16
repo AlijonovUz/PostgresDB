@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from typing import TypeVar, Generic
 from postgresdb3.orm.expressions import Q
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 @dataclass
 class PaginationResult(Generic[T]):
@@ -13,6 +14,7 @@ class PaginationResult(Generic[T]):
     has_next: bool
     has_prev: bool
     data: list[T]
+
 
 class QuerySet:
     def __init__(self, model):
@@ -25,6 +27,7 @@ class QuerySet:
         self._columns = "*"
         self._join = None
         self._group_by = None
+        self._select_for_update = False
 
     def _clone(self):
         qs = self.__class__(self.model)
@@ -36,6 +39,7 @@ class QuerySet:
         qs._columns = self._columns
         qs._join = self._join
         qs._group_by = self._group_by
+        qs._select_for_update = self._select_for_update
         return qs
 
     def update(self, **kwargs):
@@ -48,7 +52,9 @@ class QuerySet:
 
         for key in kwargs:
             if key not in self.model._fields:
-                raise ValueError(f"{self.model.__name__} modelida '{key}' degan ustun yo'q")
+                raise ValueError(
+                    f"{self.model.__name__} modelida '{key}' degan ustun yo'q"
+                )
 
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
@@ -58,11 +64,7 @@ class QuerySet:
         if not where:
             raise ValueError("Yangilash uchun shart berilishi kerak")
 
-        return self.model.db.update_where(
-            self.model.table,
-            kwargs,
-            where
-        )
+        return self.model.db.update_where(self.model.table, kwargs, where)
 
     def delete(self):
         self.model._check_setup()
@@ -72,10 +74,7 @@ class QuerySet:
         if not where:
             raise ValueError("O'chirish uchun shart berilishi kerak")
 
-        return self.model.db.delete_where(
-            self.model.table,
-            where
-        )
+        return self.model.db.delete_where(self.model.table, where)
 
     def join(self, table, on_condition, join_type="INNER JOIN"):
         qs = self._clone()
@@ -92,20 +91,25 @@ class QuerySet:
         qs = self._clone()
         if qs._join is None:
             qs._join = []
-            
+
         for field_name in fields:
             field = self.model._fields.get(field_name)
             if not field or not hasattr(field, "to"):
-                raise ValueError(f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi.")
-                
+                raise ValueError(
+                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi."
+                )
+
             from .fields.foreign import ManyToManyField
+
             if isinstance(field, ManyToManyField):
-                raise TypeError(f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating.")
-                
+                raise TypeError(
+                    f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating."
+                )
+
             related_table = field.to.table
             on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
             qs._join.append(("LEFT JOIN", related_table, on_condition))
-            
+
         return qs
 
     def prefetch_related(self, *fields):
@@ -119,39 +123,51 @@ class QuerySet:
         qs._prefetch.extend(fields)
         return qs
 
+    def select_for_update(self):
+        """
+        Joriy tranzaksiya doirasida tanlangan qatorlarni qulflash (lock) uchun.
+        Pessimistic locking (balans yangilash va sh.k. poyga holatlarining oldini olish uchun).
+        """
+        qs = self._clone()
+        qs._select_for_update = True
+        return qs
+
     def _process_auto_joins(self, kwargs):
         new_kwargs = {}
         for key, value in kwargs.items():
             parts = key.split("__")
-            
+
             if len(parts) >= 2:
                 field_name = parts[0]
                 relation = getattr(self.model, field_name, None)
-                
+
                 if relation and hasattr(relation, "related_model"):
                     target_table = relation.related_model.table
                     source_col = getattr(relation, "field_name", field_name)
                     target_col = relation.related_model.get_pk_name()
-                    
-                    join_condition = f"{self.model.table}.{source_col} = {target_table}.{target_col}"
-                    
+
+                    join_condition = (
+                        f"{self.model.table}.{source_col} = {target_table}.{target_col}"
+                    )
+
                     if not self._join:
                         self._join = []
-                        
+
                     join_exists = any(
-                        j[1] == target_table and j[2] == join_condition 
-                        for j in self._join if isinstance(j, tuple) and len(j) == 3
+                        j[1] == target_table and j[2] == join_condition
+                        for j in self._join
+                        if isinstance(j, tuple) and len(j) == 3
                     )
-                    
+
                     if not join_exists:
                         self._join.append(("INNER JOIN", target_table, join_condition))
-                    
+
                     new_key = f"{target_table}.{'__'.join(parts[1:])}"
                     new_kwargs[new_key] = value
                     continue
-                    
+
             new_kwargs[key] = value
-            
+
         return new_kwargs
 
     def filter(self, *args, **kwargs):
@@ -230,10 +246,10 @@ class QuerySet:
 
     def all(self):
         where = self._build_where()
-        
+
         columns = self._columns or "*"
         group_by = self._group_by
-        
+
         if hasattr(self, "_annotations") and self._annotations:
             if columns == "*":
                 columns = f"{self.model.table}.*"
@@ -242,7 +258,7 @@ class QuerySet:
                     columns += f", {expression.to_sql()} AS {alias}"
                 else:
                     columns += f", {expression} AS {alias}"
-            
+
             if not group_by:
                 group_by = f"{self.model.table}.{self.model.get_pk_name()}"
 
@@ -252,42 +268,49 @@ class QuerySet:
             where=where,
             join=self._join,
             group_by=group_by,
-            order_by=self._order_by,
+            order_by=self._get_order_by_sql(),
             limit=self._limit,
             offset=self._offset,
+            for_update=self._select_for_update,
         )
-        
+
         if getattr(self, "_return_type", None) == "dict":
             return records
         elif getattr(self, "_return_type", None) == "list":
             if getattr(self, "_flat", False):
-                return [list(r.values())[0] if isinstance(r, dict) else r[0] for r in records]
-            return [tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records]
-            
+                return [
+                    list(r.values())[0] if isinstance(r, dict) else r[0]
+                    for r in records
+                ]
+            return [
+                tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records
+            ]
+
         instances = self.model._from_records(records)
-        
-                                            
+
         if hasattr(self, "_prefetch") and self._prefetch and instances:
             for field_name in self._prefetch:
                 relation = getattr(self.model, field_name, None)
                 if not relation:
                     continue
-                
+
                 pk_name = self.model.get_pk_name()
                 instance_pks = [getattr(inst, pk_name) for inst in instances]
-                
-                                                  
-                from postgresdb3.orm.relations import ManyToManyRelation, ReverseRelation
+
+                from postgresdb3.orm.relations import (
+                    ManyToManyRelation,
+                    ReverseRelation,
+                )
+
                 if isinstance(relation, ManyToManyRelation):
                     target_model = relation.target_model
                     through_table = relation.through_table
                     source_col = relation.source_col
                     target_col = relation.target_col
-                    
+
                     placeholders = ", ".join(["%s"] * len(instance_pks))
                     sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
-                    
-                                      
+
                     conn = self.model.db.pool.getconn()
                     try:
                         with conn.cursor() as cursor:
@@ -295,7 +318,7 @@ class QuerySet:
                             mapping_records = cursor.fetchall()
                     finally:
                         self.model.db.pool.putconn(conn)
-                        
+
                     mapping_dict = {}
                     target_ids = set()
                     for r in mapping_records:
@@ -304,27 +327,40 @@ class QuerySet:
                             mapping_dict[s_id] = []
                         mapping_dict[s_id].append(t_id)
                         target_ids.add(t_id)
-                        
+
                     if target_ids:
-                        target_instances = target_model.filter(**{f"{target_model.get_pk_name()}__in": list(target_ids)}).all()
-                        target_map = {getattr(t, target_model.get_pk_name()): t for t in target_instances}
-                        
+                        target_instances = target_model.filter(
+                            **{f"{target_model.get_pk_name()}__in": list(target_ids)}
+                        ).all()
+                        target_map = {
+                            getattr(t, target_model.get_pk_name()): t
+                            for t in target_instances
+                        }
+
                         for inst in instances:
                             pk = getattr(inst, pk_name)
-                            prefetched = [target_map[t_id] for t_id in mapping_dict.get(pk, []) if t_id in target_map]
+                            prefetched = [
+                                target_map[t_id]
+                                for t_id in mapping_dict.get(pk, [])
+                                if t_id in target_map
+                            ]
                             setattr(inst, f"_prefetched_{field_name}", prefetched)
-                            
+
                 elif isinstance(relation, ReverseRelation):
                     related_model = relation.related_model
                     fk_name = relation.fk_name
-                    
-                    related_instances = related_model.filter(**{f"{fk_name}__in": instance_pks}).all()
-                    
+
+                    related_instances = related_model.filter(
+                        **{f"{fk_name}__in": instance_pks}
+                    ).all()
+
                     for inst in instances:
                         pk = getattr(inst, pk_name)
-                        prefetched = [r for r in related_instances if getattr(r, fk_name) == pk]
+                        prefetched = [
+                            r for r in related_instances if getattr(r, fk_name) == pk
+                        ]
                         setattr(inst, f"_prefetched_{field_name}", prefetched)
-        
+
         return instances
 
     def first(self):
@@ -335,25 +371,15 @@ class QuerySet:
             where=where,
             join=self._join,
             group_by=self._group_by,
-            order_by=self._order_by,
+            order_by=self._get_order_by_sql(),
             limit=1 if self._limit is None else self._limit,
             offset=self._offset,
             fetchone=True,
+            for_update=self._select_for_update,
         )
         return self.model._from_record(record)
 
     def last(self):
-        pk_name = self.model.get_pk_name()
-
-        order = self._order_by
-        if not order:
-            order = f"-{pk_name}"
-        elif isinstance(order, str):
-            if order.startswith("-"):
-                order = order[1:]
-            else:
-                order = f"-{order}"
-
         where = self._build_where()
 
         record = self.model.db.select(
@@ -362,10 +388,11 @@ class QuerySet:
             where=where,
             join=self._join,
             group_by=self._group_by,
-            order_by=order,
+            order_by=self._get_reverse_order_by_sql(),
             limit=1,
             offset=self._offset,
             fetchone=True,
+            for_update=self._select_for_update,
         )
 
         if not record:
@@ -375,7 +402,9 @@ class QuerySet:
             return record
         elif getattr(self, "_return_type", None) == "list":
             if getattr(self, "_flat", False):
-                return list(record.values())[0] if isinstance(record, dict) else record[0]
+                return (
+                    list(record.values())[0] if isinstance(record, dict) else record[0]
+                )
             return tuple(record.values()) if isinstance(record, dict) else tuple(record)
 
         return self.model._from_record(record)
@@ -385,11 +414,11 @@ class QuerySet:
         obj = qs.first()
         if obj:
             return obj, False
-            
+
         params = kwargs.copy()
         if defaults:
             params.update(defaults)
-            
+
         return self.model.create(**params), True
 
     def update_or_create(self, defaults=None, **kwargs):
@@ -401,7 +430,7 @@ class QuerySet:
                 setattr(obj, key, value)
             obj.save()
             return obj, False
-            
+
         params = kwargs.copy()
         params.update(defaults)
         return self.model.create(**params), True
@@ -410,14 +439,22 @@ class QuerySet:
         if not kwargs:
             return 0
         where = self._build_where()
-        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
-            raise ValueError("Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)")
+        if not where or (
+            isinstance(where, Q) and not where.conditions and not where.children
+        ):
+            raise ValueError(
+                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)"
+            )
         return self.model.db.update_where(self.model.table, kwargs, where=where)
 
     def delete(self):
         where = self._build_where()
-        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
-            raise ValueError("Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)")
+        if not where or (
+            isinstance(where, Q) and not where.conditions and not where.children
+        ):
+            raise ValueError(
+                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)"
+            )
         return self.model.db.delete_where(self.model.table, where=where)
 
     def count(self):
@@ -427,7 +464,7 @@ class QuerySet:
             columns="COUNT(*)",
             where=where,
             join=self._join,
-            fetchone=True
+            fetchone=True,
         )
         if isinstance(record, dict) or hasattr(record, "keys"):
             return list(record.values())[0]
@@ -437,17 +474,17 @@ class QuerySet:
         columns = []
         for alias, agg in kwargs.items():
             columns.append(f"{agg.to_sql()} AS {alias}")
-            
+
         where = self._build_where()
         record = self.model.db.select(
             self.model.table,
             columns=", ".join(columns),
             where=where,
             join=self._join,
-            fetchone=True
+            fetchone=True,
         )
         return dict(record) if record else {}
-        
+
     def paginate(self, page: int, per_page: int):
         total = self.count()
         pages = (total + per_page - 1) // per_page
@@ -459,7 +496,7 @@ class QuerySet:
             per_page=per_page,
             has_next=page < pages,
             has_prev=page > 1,
-            data=data
+            data=data,
         )
 
     def exists(self):
@@ -471,11 +508,50 @@ class QuerySet:
             group_by=self._group_by,
         )
 
+    def _get_order_by_sql(self):
+        order_by = self._order_by
+        if not order_by:
+            order_by = self.model._meta_options.get("ordering", None)
+
+        if not order_by:
+            return None
+
+        if isinstance(order_by, str):
+            order_by = [order_by]
+
+        parts = []
+        for item in order_by:
+            if not isinstance(item, str):
+                continue
+            item = item.strip()
+            if item.startswith("-"):
+                parts.append(f"{item[1:]} DESC")
+            else:
+                parts.append(f"{item} ASC")
+        return ", ".join(parts) if parts else None
+
+    def _get_reverse_order_by_sql(self):
+        order_sql = self._get_order_by_sql()
+        if not order_sql:
+            pk_name = self.model.get_pk_name()
+            return f"{pk_name} DESC"
+
+        parts = []
+        for part in order_sql.split(","):
+            part = part.strip()
+            if part.endswith(" DESC"):
+                parts.append(part[:-5] + " ASC")
+            elif part.endswith(" ASC"):
+                parts.append(part[:-4] + " DESC")
+            else:
+                parts.append(part + " DESC")
+        return ", ".join(parts)
+
     def _build_where(self):
         from postgresdb3.orm.expressions import Q
-        
+
         final_q = Q()
-        
+
         if self._where:
             if isinstance(self._where, dict):
                 final_q &= Q(**self._where)
@@ -510,6 +586,7 @@ class AsyncQuerySet:
         self._columns = "*"
         self._join = None
         self._group_by = None
+        self._select_for_update = False
 
     def _clone(self):
         qs = self.__class__(self.model)
@@ -521,6 +598,7 @@ class AsyncQuerySet:
         qs._columns = self._columns
         qs._join = self._join
         qs._group_by = self._group_by
+        qs._select_for_update = self._select_for_update
         return qs
 
     async def update(self, **kwargs):
@@ -533,7 +611,9 @@ class AsyncQuerySet:
 
         for key in kwargs:
             if key not in self.model._fields:
-                raise ValueError(f"{self.model.__name__} modelida '{key}' degan ustun yo'q")
+                raise ValueError(
+                    f"{self.model.__name__} modelida '{key}' degan ustun yo'q"
+                )
 
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
@@ -543,11 +623,7 @@ class AsyncQuerySet:
         if not where:
             raise ValueError("Yangilash uchun shart berilishi kerak")
 
-        return await self.model.db.update_where(
-            self.model.table,
-            kwargs,
-            where
-        )
+        return await self.model.db.update_where(self.model.table, kwargs, where)
 
     async def delete(self):
         self.model._check_setup()
@@ -557,44 +633,44 @@ class AsyncQuerySet:
         if not where:
             raise ValueError("O'chirish uchun shart berilishi kerak")
 
-        return await self.model.db.delete_where(
-            self.model.table,
-            where
-        )
+        return await self.model.db.delete_where(self.model.table, where)
 
     def _process_auto_joins(self, kwargs):
         new_kwargs = {}
         for key, value in kwargs.items():
             parts = key.split("__")
-            
+
             if len(parts) >= 2:
                 field_name = parts[0]
                 relation = getattr(self.model, field_name, None)
-                
+
                 if relation and hasattr(relation, "related_model"):
                     target_table = relation.related_model.table
                     source_col = getattr(relation, "field_name", field_name)
                     target_col = relation.related_model.get_pk_name()
-                    
-                    join_condition = f"{self.model.table}.{source_col} = {target_table}.{target_col}"
-                    
+
+                    join_condition = (
+                        f"{self.model.table}.{source_col} = {target_table}.{target_col}"
+                    )
+
                     if not self._join:
                         self._join = []
-                        
+
                     join_exists = any(
-                        j[1] == target_table and j[2] == join_condition 
-                        for j in self._join if isinstance(j, tuple) and len(j) == 3
+                        j[1] == target_table and j[2] == join_condition
+                        for j in self._join
+                        if isinstance(j, tuple) and len(j) == 3
                     )
-                    
+
                     if not join_exists:
                         self._join.append(("INNER JOIN", target_table, join_condition))
-                    
+
                     new_key = f"{target_table}.{'__'.join(parts[1:])}"
                     new_kwargs[new_key] = value
                     continue
-                    
+
             new_kwargs[key] = value
-            
+
         return new_kwargs
 
     def filter(self, *args, **kwargs):
@@ -618,17 +694,18 @@ class AsyncQuerySet:
         qs._annotations.update(kwargs)
         return qs
 
-    def paginate(self, page: int = 1, per_page: int = 10):
-        total = self.count()
+    async def paginate(self, page: int = 1, per_page: int = 10):
+        total = await self.count()
         offset = (page - 1) * per_page
-        data = self.limit(per_page).offset(offset).all()
+        data = await self.limit(per_page).offset(offset).all()
         import math
+
         return {
             "data": data,
             "total": total,
             "page": page,
             "per_page": per_page,
-            "total_pages": math.ceil(total / per_page) if per_page else 1
+            "total_pages": math.ceil(total / per_page) if per_page else 1,
         }
 
     def exclude(self, *args, **kwargs):
@@ -636,7 +713,7 @@ class AsyncQuerySet:
 
         if qs._exclude is None:
             qs._exclude = []
-            
+
         if not isinstance(qs._exclude, list):
             qs._exclude = [qs._exclude]
 
@@ -680,20 +757,25 @@ class AsyncQuerySet:
         qs = self._clone()
         if qs._join is None:
             qs._join = []
-            
+
         for field_name in fields:
             field = self.model._fields.get(field_name)
             if not field or not hasattr(field, "to"):
-                raise ValueError(f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi.")
-                
+                raise ValueError(
+                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi."
+                )
+
             from .fields.foreign import ManyToManyField
+
             if isinstance(field, ManyToManyField):
-                raise TypeError(f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating.")
-                
+                raise TypeError(
+                    f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating."
+                )
+
             related_table = field.to.table
             on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
             qs._join.append(("LEFT JOIN", related_table, on_condition))
-            
+
         return qs
 
     def group_by(self, value):
@@ -723,12 +805,21 @@ class AsyncQuerySet:
         qs._prefetch.extend(fields)
         return qs
 
+    def select_for_update(self):
+        """
+        Joriy tranzaksiya doirasida tanlangan qatorlarni qulflash (lock) uchun.
+        Pessimistic locking (balans yangilash va sh.k. poyga holatlarining oldini olish uchun).
+        """
+        qs = self._clone()
+        qs._select_for_update = True
+        return qs
+
     async def all(self):
         where = self._build_where()
-        
+
         columns = self._columns or "*"
         group_by = self._group_by
-        
+
         if hasattr(self, "_annotations") and self._annotations:
             if columns == "*":
                 columns = f"{self.model.table}.*"
@@ -737,7 +828,7 @@ class AsyncQuerySet:
                     columns += f", {expression.to_sql()} AS {alias}"
                 else:
                     columns += f", {expression} AS {alias}"
-            
+
             if not group_by:
                 group_by = f"{self.model.table}.{self.model.get_pk_name()}"
 
@@ -747,42 +838,56 @@ class AsyncQuerySet:
             where=where,
             join=self._join,
             group_by=group_by,
-            order_by=self._order_by,
+            order_by=self._get_order_by_sql(),
             limit=self._limit,
             offset=self._offset,
             fetchone=False,
+            for_update=self._select_for_update,
         )
-        
+
         if getattr(self, "_return_type", None) == "dict":
             return records
         elif getattr(self, "_return_type", None) == "list":
             if getattr(self, "_flat", False):
-                return [list(r.values())[0] if isinstance(r, dict) else r[0] for r in records]
-            return [tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records]
-            
+                return [
+                    list(r.values())[0] if isinstance(r, dict) else r[0]
+                    for r in records
+                ]
+            return [
+                tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records
+            ]
+
         instances = self.model._from_records(records)
-        
+
         if hasattr(self, "_prefetch") and self._prefetch and instances:
             for field_name in self._prefetch:
                 relation = getattr(self.model, field_name, None)
                 if not relation:
                     continue
-                
+
                 pk_name = self.model.get_pk_name()
                 instance_pks = [getattr(inst, pk_name) for inst in instances]
-                
-                from postgresdb3.orm.relations import ManyToManyRelation, AsyncReverseRelation
+
+                from postgresdb3.orm.relations import (
+                    ManyToManyRelation,
+                    AsyncReverseRelation,
+                )
+
                 if isinstance(relation, ManyToManyRelation):
                     target_model = relation.target_model
                     through_table = relation.through_table
                     source_col = relation.source_col
                     target_col = relation.target_col
-                    
-                    placeholders = ", ".join([f"${i+1}" for i in range(len(instance_pks))])
+
+                    placeholders = ", ".join(
+                        [f"${i+1}" for i in range(len(instance_pks))]
+                    )
                     sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
-                    
-                    mapping_records = await self.model.db._manager(sql, *instance_pks, fetchall=True)
-                    
+
+                    mapping_records = await self.model.db._manager(
+                        sql, *instance_pks, fetchall=True
+                    )
+
                     mapping_dict = {}
                     target_ids = set()
                     for r in mapping_records:
@@ -791,27 +896,40 @@ class AsyncQuerySet:
                             mapping_dict[s_id] = []
                         mapping_dict[s_id].append(t_id)
                         target_ids.add(t_id)
-                        
+
                     if target_ids:
-                        target_instances = await target_model.filter(**{f"{target_model.get_pk_name()}__in": list(target_ids)}).all()
-                        target_map = {getattr(t, target_model.get_pk_name()): t for t in target_instances}
-                        
+                        target_instances = await target_model.filter(
+                            **{f"{target_model.get_pk_name()}__in": list(target_ids)}
+                        ).all()
+                        target_map = {
+                            getattr(t, target_model.get_pk_name()): t
+                            for t in target_instances
+                        }
+
                         for inst in instances:
                             pk = getattr(inst, pk_name)
-                            prefetched = [target_map[t_id] for t_id in mapping_dict.get(pk, []) if t_id in target_map]
+                            prefetched = [
+                                target_map[t_id]
+                                for t_id in mapping_dict.get(pk, [])
+                                if t_id in target_map
+                            ]
                             setattr(inst, f"_prefetched_{field_name}", prefetched)
-                            
+
                 elif isinstance(relation, AsyncReverseRelation):
                     related_model = relation.related_model
                     fk_name = relation.fk_name
-                    
-                    related_instances = await related_model.filter(**{f"{fk_name}__in": instance_pks}).all()
-                    
+
+                    related_instances = await related_model.filter(
+                        **{f"{fk_name}__in": instance_pks}
+                    ).all()
+
                     for inst in instances:
                         pk = getattr(inst, pk_name)
-                        prefetched = [r for r in related_instances if getattr(r, fk_name) == pk]
+                        prefetched = [
+                            r for r in related_instances if getattr(r, fk_name) == pk
+                        ]
                         setattr(inst, f"_prefetched_{field_name}", prefetched)
-        
+
         return instances
 
     async def first(self):
@@ -822,10 +940,11 @@ class AsyncQuerySet:
             where=where,
             join=self._join,
             group_by=self._group_by,
-            order_by=self._order_by,
+            order_by=self._get_order_by_sql(),
             limit=1 if self._limit is None else self._limit,
             offset=self._offset,
             fetchone=True,
+            for_update=self._select_for_update,
         )
 
         if not record:
@@ -835,7 +954,9 @@ class AsyncQuerySet:
             return record
         elif getattr(self, "_return_type", None) == "list":
             if getattr(self, "_flat", False):
-                return list(record.values())[0] if isinstance(record, dict) else record[0]
+                return (
+                    list(record.values())[0] if isinstance(record, dict) else record[0]
+                )
             return tuple(record.values()) if isinstance(record, dict) else tuple(record)
 
         return self.model._from_record(record)
@@ -845,11 +966,11 @@ class AsyncQuerySet:
         obj = await qs.first()
         if obj:
             return obj, False
-            
+
         params = kwargs.copy()
         if defaults:
             params.update(defaults)
-            
+
         return await self.model.create(**params), True
 
     async def update_or_create(self, defaults=None, **kwargs):
@@ -861,7 +982,7 @@ class AsyncQuerySet:
                 setattr(obj, key, value)
             await obj.save()
             return obj, False
-            
+
         params = kwargs.copy()
         params.update(defaults)
         return await self.model.create(**params), True
@@ -870,28 +991,25 @@ class AsyncQuerySet:
         if not kwargs:
             return 0
         where = self._build_where()
-        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
-            raise ValueError("Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)")
+        if not where or (
+            isinstance(where, Q) and not where.conditions and not where.children
+        ):
+            raise ValueError(
+                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)"
+            )
         return await self.model.db.update_where(self.model.table, kwargs, where=where)
 
     async def delete(self):
         where = self._build_where()
-        if not where or (isinstance(where, Q) and not where.conditions and not where.children):
-            raise ValueError("Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)")
+        if not where or (
+            isinstance(where, Q) and not where.conditions and not where.children
+        ):
+            raise ValueError(
+                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)"
+            )
         return await self.model.db.delete_where(self.model.table, where=where)
 
     async def last(self):
-        pk_name = self.model.get_pk_name()
-
-        order = self._order_by
-        if not order:
-            order = f"-{pk_name}"
-        elif isinstance(order, str):
-            if order.startswith("-"):
-                order = order[1:]
-            else:
-                order = f"-{order}"
-
         where = self._build_where()
 
         record = await self.model.db.select(
@@ -900,10 +1018,11 @@ class AsyncQuerySet:
             where=where,
             join=self._join,
             group_by=self._group_by,
-            order_by=order,
+            order_by=self._get_reverse_order_by_sql(),
             limit=1,
             offset=self._offset,
             fetchone=True,
+            for_update=self._select_for_update,
         )
 
         return self.model._from_record(record)
@@ -915,7 +1034,7 @@ class AsyncQuerySet:
             columns="COUNT(*)",
             where=where,
             join=self._join,
-            fetchone=True
+            fetchone=True,
         )
         if hasattr(record, "items"):
             return list(record.values())[0]
@@ -925,17 +1044,17 @@ class AsyncQuerySet:
         columns = []
         for alias, agg in kwargs.items():
             columns.append(f"{agg.to_sql()} AS {alias}")
-            
+
         where = self._build_where()
         record = await self.model.db.select(
             self.model.table,
             columns=", ".join(columns),
             where=where,
             join=self._join,
-            fetchone=True
+            fetchone=True,
         )
         return dict(record) if record else {}
-        
+
     async def exists(self):
         where = self._build_where()
         return await self.model.db.exists_where(
@@ -945,11 +1064,50 @@ class AsyncQuerySet:
             group_by=self._group_by,
         )
 
+    def _get_order_by_sql(self):
+        order_by = self._order_by
+        if not order_by:
+            order_by = self.model._meta_options.get("ordering", None)
+
+        if not order_by:
+            return None
+
+        if isinstance(order_by, str):
+            order_by = [order_by]
+
+        parts = []
+        for item in order_by:
+            if not isinstance(item, str):
+                continue
+            item = item.strip()
+            if item.startswith("-"):
+                parts.append(f"{item[1:]} DESC")
+            else:
+                parts.append(f"{item} ASC")
+        return ", ".join(parts) if parts else None
+
+    def _get_reverse_order_by_sql(self):
+        order_sql = self._get_order_by_sql()
+        if not order_sql:
+            pk_name = self.model.get_pk_name()
+            return f"{pk_name} DESC"
+
+        parts = []
+        for part in order_sql.split(","):
+            part = part.strip()
+            if part.endswith(" DESC"):
+                parts.append(part[:-5] + " ASC")
+            elif part.endswith(" ASC"):
+                parts.append(part[:-4] + " DESC")
+            else:
+                parts.append(part + " DESC")
+        return ", ".join(parts)
+
     def _build_where(self):
         from postgresdb3.orm.expressions import Q
-        
+
         final_q = Q()
-        
+
         if self._where:
             if isinstance(self._where, dict):
                 final_q &= Q(**self._where)

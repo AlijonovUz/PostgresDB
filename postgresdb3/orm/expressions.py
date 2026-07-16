@@ -3,6 +3,7 @@ class Q:
     Q obyekti ma'lumotlar bazasida murakkab AND va OR shartlarini yozish uchun ishlatiladi.
     Misol uchun: Q(age__gt=18) | Q(name="Ali")
     """
+
     def __init__(self, **kwargs):
         self.conditions = kwargs
         self.children = []
@@ -10,7 +11,9 @@ class Q:
 
     def _combine(self, other, connector):
         if not isinstance(other, Q):
-            raise TypeError("Q obyektini faqat boshqa Q obyekti bilan birlashtirish mumkin")
+            raise TypeError(
+                "Q obyektini faqat boshqa Q obyekti bilan birlashtirish mumkin"
+            )
         obj = Q()
         obj.connector = connector
         obj.children = [self, other]
@@ -34,6 +37,7 @@ class F:
     F obyekti ma'lumotlar bazasining o'zidagi ustun qiymatlariga murojaat qilish uchun ishlatiladi.
     Masalan: Model.update(views=F("views") + 1)
     """
+
     def __init__(self, name):
         self.name = name
 
@@ -56,25 +60,32 @@ class FExpression:
         self.operator = operator
         self.value = value
 
+
 class Aggregate:
     function = ""
+
     def __init__(self, field):
         self.field = field
 
     def to_sql(self):
         return f"{self.function}({self.field})"
 
+
 class Sum(Aggregate):
     function = "SUM"
+
 
 class Avg(Aggregate):
     function = "AVG"
 
+
 class Min(Aggregate):
     function = "MIN"
 
+
 class Max(Aggregate):
     function = "MAX"
+
 
 class Count(Aggregate):
     function = "COUNT"

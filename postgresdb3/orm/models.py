@@ -7,10 +7,12 @@ class Model(BaseModel, metaclass=ModelMeta):
     Sinxron muhit uchun ORM Model klassi.
     Jadval tuzilishi, ma'lumotlarni o'qish, yozish, yangilash va o'chirish metodlarini taqdim etadi.
     """
+
     @classmethod
     def query(cls):
         cls._check_setup()
         from .query import QuerySet
+
         return QuerySet(cls)
 
     @classmethod
@@ -126,10 +128,10 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         columns = ", ".join(kwargs.keys())
         values = tuple(kwargs.values())
-        
+
         record = cls.db.insert(cls.table, columns, values, returning="*")
         return cls._from_record(record)
-        
+
     @classmethod
     def get_or_create(cls, defaults=None, **kwargs):
         return cls.query().get_or_create(defaults=defaults, **kwargs)
@@ -142,18 +144,25 @@ class Model(BaseModel, metaclass=ModelMeta):
     def bulk_create(cls, instances: list["Model"]) -> None:
         if not instances:
             return
-            
-        columns = [k for k, f in cls._fields.items() if not (f.primary_key and f.sql_type in ("SERIAL", "BIGSERIAL"))]
-        
+
+        columns = [
+            k
+            for k, f in cls._fields.items()
+            if not (f.primary_key and f.sql_type in ("SERIAL", "BIGSERIAL"))
+        ]
+
         values_list = []
         for inst in instances:
             for col in columns:
-                if getattr(inst, col, None) is None and cls._fields[col].default is not None:
+                if (
+                    getattr(inst, col, None) is None
+                    and cls._fields[col].default is not None
+                ):
                     setattr(inst, col, cls._fields[col].default)
-                    
+
             val_tuple = tuple(getattr(inst, col, None) for col in columns)
             values_list.append(val_tuple)
-            
+
         columns_str = ", ".join(columns)
         with cls.db.transaction():
             cls.db.insert_many(cls.table, columns_str, values_list)
@@ -162,29 +171,38 @@ class Model(BaseModel, metaclass=ModelMeta):
     def bulk_update(cls, instances: list["Model"], fields: list[str]) -> None:
         if not instances or not fields:
             return
-            
+
         pk_name = cls.get_pk_name()
         set_clause = ", ".join([f"{f} = %s" for f in fields])
         sql = f"UPDATE {cls.table} SET {set_clause} WHERE {pk_name} = %s"
-        
+
         values_list = []
         for inst in instances:
-            val_tuple = tuple(getattr(inst, f, None) for f in fields) + (getattr(inst, pk_name),)
+            val_tuple = tuple(getattr(inst, f, None) for f in fields) + (
+                getattr(inst, pk_name),
+            )
             values_list.append(val_tuple)
-            
+
         with cls.db.transaction():
             cls.db._manager(sql, values_list, commit=True, many=True)
 
     def clean(self):
         for field_name, field in self.__class__._fields.items():
             value = getattr(self, field_name, None)
-            if hasattr(field, 'validate'):
+            if hasattr(field, "validate"):
                 setattr(self, field_name, field.validate(value))
 
-    def before_save(self): pass
-    def after_save(self, created: bool): pass
-    def before_delete(self): pass
-    def after_delete(self): pass
+    def before_save(self):
+        pass
+
+    def after_save(self, created: bool):
+        pass
+
+    def before_delete(self):
+        pass
+
+    def after_delete(self):
+        pass
 
     def save(self):
         self.__class__._check_setup()
@@ -211,12 +229,7 @@ class Model(BaseModel, metaclass=ModelMeta):
                 continue
             data[field_name] = getattr(self, field_name, None)
 
-        self.__class__.db.update_fields(
-            self.__class__.table,
-            data,
-            pk_name,
-            pk_value
-        )
+        self.__class__.db.update_fields(self.__class__.table, data, pk_name, pk_value)
 
         self.after_save(created=False)
         return self
@@ -235,12 +248,19 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         for key, value in kwargs.items():
             if key not in self.__class__._fields:
-                raise ValueError(f"{self.__class__.__name__} modelida '{key}' degan ustun yo'q")
+                raise ValueError(
+                    f"{self.__class__.__name__} modelida '{key}' degan ustun yo'q"
+                )
 
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
 
-            if not isinstance(value, __import__("postgresdb3.orm.expressions", fromlist=["FExpression"]).FExpression):
+            if not isinstance(
+                value,
+                __import__(
+                    "postgresdb3.orm.expressions", fromlist=["FExpression"]
+                ).FExpression,
+            ):
                 setattr(self, key, value)
 
         self.__class__.db.update_fields(self.__class__.table, kwargs, pk_name, pk_value)
@@ -267,10 +287,12 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
     Asinxron muhit uchun ORM Model klassi.
     Sinxron Model bilan bir xil ishlaydi, faqat barcha metodlari (create, update, delete va hk) `await` bilan chaqirilishi kerak.
     """
+
     @classmethod
     def query(cls):
         cls._check_setup()
         from .query import AsyncQuerySet
+
         return AsyncQuerySet(cls)
 
     @classmethod
@@ -386,9 +408,9 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         columns = ", ".join(kwargs.keys())
         values = tuple(kwargs.values())
         record = await cls.db.insert(cls.table, columns, values, returning="*")
-        
+
         return cls._from_record(record)
-        
+
     @classmethod
     async def get_or_create(cls, defaults=None, **kwargs):
         return await cls.query().get_or_create(defaults=defaults, **kwargs)
@@ -396,54 +418,72 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
     @classmethod
     async def update_or_create(cls, defaults=None, **kwargs):
         return await cls.query().update_or_create(defaults=defaults, **kwargs)
-        
+
     @classmethod
     async def bulk_create(cls, instances: list["AsyncModel"]) -> None:
         if not instances:
             return
-            
-        columns = [k for k, f in cls._fields.items() if not (f.primary_key and f.sql_type in ("SERIAL", "BIGSERIAL"))]
-        
+
+        columns = [
+            k
+            for k, f in cls._fields.items()
+            if not (f.primary_key and f.sql_type in ("SERIAL", "BIGSERIAL"))
+        ]
+
         values_list = []
         for inst in instances:
             for col in columns:
-                if getattr(inst, col, None) is None and cls._fields[col].default is not None:
+                if (
+                    getattr(inst, col, None) is None
+                    and cls._fields[col].default is not None
+                ):
                     setattr(inst, col, cls._fields[col].default)
-                    
+
             val_tuple = tuple(getattr(inst, col, None) for col in columns)
             values_list.append(val_tuple)
-            
+
         columns_str = ", ".join(columns)
         async with cls.db.transaction():
             await cls.db.insert_many(cls.table, columns_str, values_list)
 
     @classmethod
-    async def bulk_update(cls, instances: list["AsyncModel"], fields: list[str]) -> None:
+    async def bulk_update(
+        cls, instances: list["AsyncModel"], fields: list[str]
+    ) -> None:
         if not instances or not fields:
             return
-            
+
         pk_name = cls.get_pk_name()
         set_clause = ", ".join([f"{f} = ${i+1}" for i, f in enumerate(fields)])
         sql = f"UPDATE {cls.table} SET {set_clause} WHERE {pk_name} = ${len(fields)+1}"
-        
+
         values_list = []
         for inst in instances:
-            val_tuple = tuple(getattr(inst, f, None) for f in fields) + (getattr(inst, pk_name),)
+            val_tuple = tuple(getattr(inst, f, None) for f in fields) + (
+                getattr(inst, pk_name),
+            )
             values_list.append(val_tuple)
-            
+
         async with cls.db.transaction():
             await cls.db._manager(sql, values_list, commit=True, many=True)
 
     async def clean(self):
         for field_name, field in self.__class__._fields.items():
             value = getattr(self, field_name, None)
-            if hasattr(field, 'validate'):
+            if hasattr(field, "validate"):
                 setattr(self, field_name, field.validate(value))
 
-    async def before_save(self): pass
-    async def after_save(self, created: bool): pass
-    async def before_delete(self): pass
-    async def after_delete(self): pass
+    async def before_save(self):
+        pass
+
+    async def after_save(self, created: bool):
+        pass
+
+    async def before_delete(self):
+        pass
+
+    async def after_delete(self):
+        pass
 
     async def save(self):
         self.__class__._check_setup()
@@ -471,10 +511,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             data[field_name] = getattr(self, field_name, None)
 
         await self.__class__.db.update_fields(
-            self.__class__.table,
-            data,
-            pk_name,
-            pk_value
+            self.__class__.table, data, pk_name, pk_value
         )
 
         await self.after_save(created=False)
@@ -494,15 +531,24 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
         for key, value in kwargs.items():
             if key not in self.__class__._fields:
-                raise ValueError(f"{self.__class__.__name__} modelida '{key}' degan ustun yo'q")
+                raise ValueError(
+                    f"{self.__class__.__name__} modelida '{key}' degan ustun yo'q"
+                )
 
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
 
-            if not isinstance(value, __import__("postgresdb3.orm.expressions", fromlist=["FExpression"]).FExpression):
+            if not isinstance(
+                value,
+                __import__(
+                    "postgresdb3.orm.expressions", fromlist=["FExpression"]
+                ).FExpression,
+            ):
                 setattr(self, key, value)
 
-        await self.__class__.db.update_fields(self.__class__.table, kwargs, pk_name, pk_value)
+        await self.__class__.db.update_fields(
+            self.__class__.table, kwargs, pk_name, pk_value
+        )
 
         return self
 

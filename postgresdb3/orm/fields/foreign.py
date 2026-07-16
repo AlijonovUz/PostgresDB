@@ -2,7 +2,9 @@ from .base import Field
 
 
 class ForeignKey(Field):
-    def __init__(self, to, to_field=None, related_name=None, on_delete="CASCADE", **kwargs):
+    def __init__(
+        self, to, to_field=None, related_name=None, on_delete="CASCADE", **kwargs
+    ):
         super().__init__(**kwargs)
         self.to = to
         self.to_field = to_field
@@ -36,7 +38,10 @@ class OneToOneField(ForeignKey):
     Yakkama-yakka (One-to-One) bog'lanish.
     ForeignKey bilan bir xil, faqat UNIQUE qoida qo'shiladi.
     """
-    def __init__(self, to, to_field=None, related_name=None, on_delete="CASCADE", **kwargs):
+
+    def __init__(
+        self, to, to_field=None, related_name=None, on_delete="CASCADE", **kwargs
+    ):
         kwargs["unique"] = True
         super().__init__(to, to_field, related_name, on_delete, **kwargs)
 
@@ -46,16 +51,17 @@ class ManyToManyField(Field):
     Ko'pga-ko'p (Many-to-Many) bog'lanish.
     O'rtada avtomatik bog'lovchi jadval yaratiladi.
     """
-    def __init__(self, to, related_name=None):
-        super().__init__()
+
+    def __init__(self, to, related_name=None, verbose_name=None):
+        super().__init__(verbose_name=verbose_name)
         self.to = to
         self.related_name = related_name
-        self.through = None                                  
+        self.through = None
 
     @property
     def sql_type(self):
-                                               
+
         return ""
-    
+
     def to_sql(self):
         return ""

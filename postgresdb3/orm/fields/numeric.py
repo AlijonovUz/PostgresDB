@@ -1,5 +1,6 @@
 from .base import Field
 
+
 class Integer(Field):
     sql_type = "INTEGER"
 
@@ -11,8 +12,10 @@ class BigInteger(Field):
 class SmallInteger(Field):
     sql_type = "SMALLINT"
 
+
 class Float(Field):
     sql_type = "REAL"
+
 
 class Double(Field):
     sql_type = "DOUBLE PRECISION"
@@ -28,8 +31,12 @@ class BigSerial(Field):
 
 class Decimal(Field):
 
-    def __init__(self, precision=10, scale=2, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, verbose_name=None, precision=10, scale=2, **kwargs):
+        if isinstance(verbose_name, int):
+            scale = precision
+            precision = verbose_name
+            verbose_name = None
+        super().__init__(verbose_name=verbose_name, **kwargs)
         self.precision = precision
         self.scale = scale
 

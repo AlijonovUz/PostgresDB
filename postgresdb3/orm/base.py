@@ -10,7 +10,7 @@ class BaseModel:
                 val = kwargs[field_name]
             else:
                 val = getattr(field, "default", None)
-                
+
             try:
                 setattr(self, field_name, val)
             except AttributeError:
@@ -98,13 +98,11 @@ class BaseModel:
 
     def to_dict(self):
         return {
-            field_name: getattr(self, field_name, None)
-            for field_name in self._fields
+            field_name: getattr(self, field_name, None) for field_name in self._fields
         }
 
     def __repr__(self):
         fields = ", ".join(
-            f"{name}={getattr(self, name, None)!r}"
-            for name in self._fields
+            f"{name}={getattr(self, name, None)!r}" for name in self._fields
         )
         return f"<{self.__class__.__name__} {fields}>"

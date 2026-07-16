@@ -4,7 +4,7 @@ from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import threading
-from postgresdb3.orm.expressions import Q, FExpression
+from postgresdb3.orm.expressions import Q, FExpression, F
 
 
 class PostgresDB:
@@ -15,27 +15,40 @@ class PostgresDB:
     """
 
     def __init__(
-            self, database: str, user: str, password: str, host: str = "localhost", port: int = 5432,
-            minconn: int = 1, maxconn: int = 20, echo: bool = False, ping_connections: bool = False
+        self,
+        database: str,
+        user: str,
+        password: str,
+        host: str = "localhost",
+        port: int = 5432,
+        minconn: int = 1,
+        maxconn: int = 20,
+        echo: bool = False,
+        ping_connections: bool = False,
     ) -> None:
         self.echo = echo
         self.ping_connections = ping_connections
         self.pool = pool.ThreadedConnectionPool(
-            minconn, maxconn,
-            database=database, user=user, password=password, host=host, port=port
+            minconn,
+            maxconn,
+            database=database,
+            user=user,
+            password=password,
+            host=host,
+            port=port,
         )
         self._local = threading.local()
 
     def _manager(
-            self,
-            sql: str,
-            params: Optional[list | tuple] = None,
-            *,
-            commit: bool = False,
-            many: bool = False,
-            fetchone: bool = False,
-            fetchall: bool = False,
-            fetchmany: int | None = None
+        self,
+        sql: str,
+        params: Optional[list | tuple] = None,
+        *,
+        commit: bool = False,
+        many: bool = False,
+        fetchone: bool = False,
+        fetchall: bool = False,
+        fetchmany: int | None = None,
     ) -> Any:
 
         if self.echo:
@@ -49,7 +62,7 @@ class PostgresDB:
             raise ValueError("cannot use fetchone/fetchall/fetchmany with many=True")
 
         in_transaction = getattr(self._local, "conn", None) is not None
-        
+
         if in_transaction:
             conn = self._local.conn
         else:
@@ -65,7 +78,7 @@ class PostgresDB:
                 else:
                     break
             conn.autocommit = True
-        
+
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 if many:
@@ -93,15 +106,15 @@ class PostgresDB:
             self.pool = None
 
     def raw(
-            self,
-            sql: str,
-            params: list | tuple | None = None,
-            *,
-            commit: bool = False,
-            many: bool = False,
-            fetchone: bool = False,
-            fetchall: bool = False,
-            fetchmany: int | None = None
+        self,
+        sql: str,
+        params: list | tuple | None = None,
+        *,
+        commit: bool = False,
+        many: bool = False,
+        fetchone: bool = False,
+        fetchall: bool = False,
+        fetchmany: int | None = None,
     ) -> Any:
 
         return self._manager(
@@ -161,25 +174,35 @@ class PostgresDB:
                     field, op = key, "eq"
 
                 if op in operator_map:
-                    if op in ("contains", "icontains"):
-                        value = f"%{value}%"
-                    elif op in ("startswith", "istartswith"):
-                        value = f"{value}%"
-                    elif op in ("endswith", "iendswith"):
-                        value = f"%{value}"
-                    clauses.append(f"{field} {operator_map[op]} %s")
-                    params.append(value)
+                    if isinstance(value, F):
+                        clauses.append(f"{field} {operator_map[op]} {value.name}")
+                    elif isinstance(value, FExpression):
+                        clauses.append(f"{field} {operator_map[op]} {value.name} {value.operator} %s")
+                        params.append(value.value)
+                    else:
+                        if op in ("contains", "icontains"):
+                            value = f"%{value}%"
+                        elif op in ("startswith", "istartswith"):
+                            value = f"{value}%"
+                        elif op in ("endswith", "iendswith"):
+                            value = f"%{value}"
+                        clauses.append(f"{field} {operator_map[op]} %s")
+                        params.append(value)
 
                 elif op == "in":
                     if not isinstance(value, (list, tuple)) or not value:
-                        raise ValueError(f"{field}__in uchun bo'sh bo'lmagan list/tuple kerak")
+                        raise ValueError(
+                            f"{field}__in uchun bo'sh bo'lmagan list/tuple kerak"
+                        )
                     placeholders = ", ".join(["%s"] * len(value))
                     clauses.append(f"{field} IN ({placeholders})")
                     params.extend(value)
 
                 elif op == "not_in":
                     if not isinstance(value, (list, tuple)) or not value:
-                        raise ValueError(f"{field}__not_in uchun bo'sh bo'lmagan list/tuple kerak")
+                        raise ValueError(
+                            f"{field}__not_in uchun bo'sh bo'lmagan list/tuple kerak"
+                        )
                     placeholders = ", ".join(["%s"] * len(value))
                     clauses.append(f"{field} NOT IN ({placeholders})")
                     params.extend(value)
@@ -216,7 +239,7 @@ class PostgresDB:
 
             if where.connector == "NOT":
                 return f"NOT ({clauses[0]})", params
-            
+
             return f" {where.connector} ".join(clauses), params
 
         if isinstance(where, list):
@@ -225,7 +248,9 @@ class PostgresDB:
 
             for item in where:
                 if len(item) != 3:
-                    raise ValueError("List formatidagi where elementlari (field, operator, value) bo'lishi kerak")
+                    raise ValueError(
+                        "List formatidagi where elementlari (field, operator, value) bo'lishi kerak"
+                    )
 
                 field, operator, value = item
                 op = operator.upper()
@@ -236,7 +261,9 @@ class PostgresDB:
 
                 elif op in {"IN", "NOT IN"}:
                     if not isinstance(value, (list, tuple)) or not value:
-                        raise ValueError(f"{field} {op} uchun bo'sh bo'lmagan list/tuple kerak")
+                        raise ValueError(
+                            f"{field} {op} uchun bo'sh bo'lmagan list/tuple kerak"
+                        )
                     placeholders = ", ".join(["%s"] * len(value))
                     clauses.append(f"{field} {op} ({placeholders})")
                     params.extend(value)
@@ -269,7 +296,9 @@ class PostgresDB:
             if not columns:
                 raise ValueError("columns bo'sh list bo'lmasligi kerak")
 
-            validated_columns = [self._validate_identifier(col, "column") for col in columns]
+            validated_columns = [
+                self._validate_identifier(col, "column") for col in columns
+            ]
             return ", ".join(validated_columns)
 
         if not isinstance(columns, str) or not columns.strip():
@@ -281,17 +310,18 @@ class PostgresDB:
         return columns
 
     def select(
-            self,
-            table: str,
-            columns: str | list[str] = "*",
-            where: tuple | dict | list | None = None,
-            join: list[tuple] | None = None,
-            group_by: str | None = None,
-            order_by: str | None = None,
-            limit: int | None = None,
-            offset: int | None = None,
-            fetchone: bool = False,
-            fetchmany: int | None = None
+        self,
+        table: str,
+        columns: str | list[str] = "*",
+        where: tuple | dict | list | None = None,
+        join: list[tuple] | None = None,
+        group_by: str | None = None,
+        order_by: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        fetchone: bool = False,
+        fetchmany: int | None = None,
+        for_update: bool = False,
     ) -> Any:
         table = self._validate_identifier(table, "table")
         columns = self._normalize_columns(columns)
@@ -324,6 +354,9 @@ class PostgresDB:
             sql += " OFFSET %s"
             params.append(offset)
 
+        if for_update:
+            sql += " FOR UPDATE"
+
         if fetchone:
             return self._manager(sql, params, fetchone=True)
         elif fetchmany is not None:
@@ -331,7 +364,13 @@ class PostgresDB:
         else:
             return self._manager(sql, params, fetchall=True)
 
-    def insert(self, table: str, columns: str, values: tuple | list, returning: str | None = None):
+    def insert(
+        self,
+        table: str,
+        columns: str,
+        values: tuple | list,
+        returning: str | None = None,
+    ):
         placeholders = ", ".join(["%s"] * len(values))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
 
@@ -350,11 +389,20 @@ class PostgresDB:
 
         self._manager(sql, values_list, commit=True, many=True)
 
-    def update(self, table: str, set_column: str, set_value: Any, where_column: str, where_value: Any) -> None:
+    def update(
+        self,
+        table: str,
+        set_column: str,
+        set_value: Any,
+        where_column: str,
+        where_value: Any,
+    ) -> None:
         sql = f"UPDATE {table} SET {set_column} = %s WHERE {where_column} = %s"
         self._manager(sql, (set_value, where_value), commit=True)
 
-    def update_fields(self, table: str, data: dict, where_column: str, where_value: Any) -> int:
+    def update_fields(
+        self, table: str, data: dict, where_column: str, where_value: Any
+    ) -> int:
         table = self._validate_identifier(table, "table")
         where_column = self._validate_identifier(where_column, "where column")
 
@@ -377,14 +425,22 @@ class PostgresDB:
 
         sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_column} = %s"
 
-        conn = self.pool.getconn()
+        in_transaction = getattr(self._local, "conn", None) is not None
+        if in_transaction:
+            conn = self._local.conn
+        else:
+            conn = self.pool.getconn()
+            conn.autocommit = True
+
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, tuple(params))
                 affected_rows = cursor.rowcount
-                conn.commit()
+                if not in_transaction:
+                    conn.commit()
         finally:
-            self.pool.putconn(conn)
+            if not in_transaction:
+                self.pool.putconn(conn)
 
         return affected_rows
 
@@ -431,7 +487,6 @@ class PostgresDB:
         sql = f"DELETE FROM {table} WHERE {where_column} = %s"
         self._manager(sql, (where_value,), commit=True)
 
-
     def delete_where(self, table: str, where: tuple | dict | list) -> int:
         table = self._validate_identifier(table, "table")
 
@@ -444,23 +499,31 @@ class PostgresDB:
 
         sql = f"DELETE FROM {table} WHERE {where_sql}"
 
-        conn = self.pool.getconn()
+        in_transaction = getattr(self._local, "conn", None) is not None
+        if in_transaction:
+            conn = self._local.conn
+        else:
+            conn = self.pool.getconn()
+            conn.autocommit = True
+
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, tuple(where_params))
                 affected_rows = cursor.rowcount
-                conn.commit()
+                if not in_transaction:
+                    conn.commit()
         finally:
-            self.pool.putconn(conn)
+            if not in_transaction:
+                self.pool.putconn(conn)
 
         return affected_rows
 
     def exists_where(
-            self,
-            table: str,
-            where: tuple | dict | list | None = None,
-            join: list[tuple] | None = None,
-            group_by: str | None = None,
+        self,
+        table: str,
+        where: tuple | dict | list | None = None,
+        join: list[tuple] | None = None,
+        group_by: str | None = None,
     ) -> bool:
         table = self._validate_identifier(table, "table")
 
@@ -511,14 +574,14 @@ class PostgresDB:
     def alter(self, table: str, action: str) -> Any:
         sql = f"ALTER TABLE {table} {action}"
         return self._manager(sql, commit=True)
-        
+
     @contextmanager
     def transaction(self):
         existing_conn = getattr(self._local, "conn", None)
         if existing_conn:
             yield existing_conn
             return
-            
+
         while True:
             conn = self.pool.getconn()
             if self.ping_connections:
@@ -530,11 +593,11 @@ class PostgresDB:
                     self.pool.putconn(conn, close=True)
             else:
                 break
-                
+
         conn.autocommit = True
         self._local.conn = conn
         try:
-            with conn:                                                                 
+            with conn:
                 yield conn
         finally:
             self._local.conn = None
@@ -544,15 +607,19 @@ class PostgresDB:
         """
         Sinxron funksiyalarni tranzaksiya (transaction) ichida ishlatish uchun dekorator.
         """
+
         def decorator(func):
             import functools
+
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 with self.transaction():
                     return func(*args, **kwargs)
+
             return wrapper
+
         return decorator
-        
+
     def close_pool(self):
         if self.pool:
             self.pool.closeall()
