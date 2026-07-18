@@ -157,14 +157,15 @@ class ManyToManyRelation:
 
         if self.is_async:
 
-            async def add(*target_ids):
+            async def add(*targets):
+                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
                 values = [[pk_value, t_id] for t_id in target_ids]
                 await db.insert_many(
                     self.through_table, f"{self.source_col}, {self.target_col}", values
                 )
 
-            async def remove(*target_ids):
-
+            async def remove(*targets):
+                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
                 placeholders = ", ".join(f"${i+2}" for i in range(len(target_ids)))
                 sql = f"DELETE FROM {self.through_table} WHERE {self.source_col} = $1 AND {self.target_col} IN ({placeholders})"
                 await db._manager(sql, pk_value, *target_ids, commit=True)
@@ -179,13 +180,15 @@ class ManyToManyRelation:
 
         else:
 
-            def add(*target_ids):
+            def add(*targets):
+                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
                 values = [(pk_value, t_id) for t_id in target_ids]
                 db.insert_many(
                     self.through_table, f"{self.source_col}, {self.target_col}", values
                 )
 
-            def remove(*target_ids):
+            def remove(*targets):
+                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
                 placeholders = ", ".join(["%s"] * len(target_ids))
                 sql = f"DELETE FROM {self.through_table} WHERE {self.source_col} = %s AND {self.target_col} IN ({placeholders})"
                 params = [pk_value] + list(target_ids)

@@ -132,15 +132,58 @@ class QuerySet:
         qs._select_for_update = True
         return qs
 
+    def _normalize_q(self, q):
+        if not q:
+            return q
+        from postgresdb3.orm.expressions import Q
+        if isinstance(q, Q):
+            if q.conditions:
+                q.conditions = self._process_auto_joins(q.conditions)
+            if q.children:
+                for i, child in enumerate(q.children):
+                    q.children[i] = self._normalize_q(child)
+        return q
+
     def _process_auto_joins(self, kwargs):
         new_kwargs = {}
+        from postgresdb3.orm.relations import ForeignKeyRelation, AsyncForeignKeyRelation
+        from postgresdb3.orm.base import BaseModel
+
+        def extract_pk(val):
+            if isinstance(val, BaseModel):
+                return getattr(val, val.get_pk_name())
+            return val
+
         for key, value in kwargs.items():
+            if isinstance(value, (list, tuple)):
+                value = [extract_pk(v) for v in value]
+            else:
+                value = extract_pk(value)
+
             parts = key.split("__")
+            field_name = parts[0]
 
-            if len(parts) >= 2:
-                field_name = parts[0]
-                relation = getattr(self.model, field_name, None)
+            relation = getattr(self.model, field_name, None)
+            is_fk_relation = relation and isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation))
 
+            is_fk_comparison = False
+            if is_fk_relation:
+                if len(parts) == 1:
+                    is_fk_comparison = True
+                elif len(parts) == 2:
+                    lookup_ops = {
+                        "eq", "ne", "not", "gt", "gte", "lt", "lte", "like", "ilike",
+                        "contains", "icontains", "startswith", "istartswith",
+                        "endswith", "iendswith", "in", "not_in", "isnull"
+                    }
+                    if parts[1] in lookup_ops:
+                        is_fk_comparison = True
+
+            if is_fk_comparison:
+                parts[0] = relation.field_name
+                key = "__".join(parts)
+
+            elif len(parts) >= 2:
                 if relation and hasattr(relation, "related_model"):
                     target_table = relation.related_model.table
                     source_col = getattr(relation, "field_name", field_name)
@@ -180,23 +223,27 @@ class QuerySet:
             qs._where = [qs._where]
 
         for arg in args:
-            qs._where.append(arg)
+            qs._where.append(self._normalize_q(arg))
 
         if kwargs:
-            qs._where.append(qs._process_auto_joins(kwargs))
+            qs._where.append(self._process_auto_joins(kwargs))
 
         return qs
 
-    def exclude(self, **kwargs):
+    def exclude(self, *args, **kwargs):
         qs = self._clone()
 
-        if not kwargs:
-            return qs
-
         if qs._exclude is None:
-            qs._exclude = {}
+            qs._exclude = []
 
-        qs._exclude.update(qs._process_auto_joins(kwargs))
+        if not isinstance(qs._exclude, list):
+            qs._exclude = [qs._exclude]
+
+        for arg in args:
+            qs._exclude.append(self._normalize_q(arg))
+
+        if kwargs:
+            qs._exclude.append(qs._process_auto_joins(kwargs))
         return qs
 
     def order_by(self, value):
@@ -635,15 +682,58 @@ class AsyncQuerySet:
 
         return await self.model.db.delete_where(self.model.table, where)
 
+    def _normalize_q(self, q):
+        if not q:
+            return q
+        from postgresdb3.orm.expressions import Q
+        if isinstance(q, Q):
+            if q.conditions:
+                q.conditions = self._process_auto_joins(q.conditions)
+            if q.children:
+                for i, child in enumerate(q.children):
+                    q.children[i] = self._normalize_q(child)
+        return q
+
     def _process_auto_joins(self, kwargs):
         new_kwargs = {}
+        from postgresdb3.orm.relations import ForeignKeyRelation, AsyncForeignKeyRelation
+        from postgresdb3.orm.base import BaseModel
+
+        def extract_pk(val):
+            if isinstance(val, BaseModel):
+                return getattr(val, val.get_pk_name())
+            return val
+
         for key, value in kwargs.items():
+            if isinstance(value, (list, tuple)):
+                value = [extract_pk(v) for v in value]
+            else:
+                value = extract_pk(value)
+
             parts = key.split("__")
+            field_name = parts[0]
 
-            if len(parts) >= 2:
-                field_name = parts[0]
-                relation = getattr(self.model, field_name, None)
+            relation = getattr(self.model, field_name, None)
+            is_fk_relation = relation and isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation))
 
+            is_fk_comparison = False
+            if is_fk_relation:
+                if len(parts) == 1:
+                    is_fk_comparison = True
+                elif len(parts) == 2:
+                    lookup_ops = {
+                        "eq", "ne", "not", "gt", "gte", "lt", "lte", "like", "ilike",
+                        "contains", "icontains", "startswith", "istartswith",
+                        "endswith", "iendswith", "in", "not_in", "isnull"
+                    }
+                    if parts[1] in lookup_ops:
+                        is_fk_comparison = True
+
+            if is_fk_comparison:
+                parts[0] = relation.field_name
+                key = "__".join(parts)
+
+            elif len(parts) >= 2:
                 if relation and hasattr(relation, "related_model"):
                     target_table = relation.related_model.table
                     source_col = getattr(relation, "field_name", field_name)
@@ -682,7 +772,9 @@ class AsyncQuerySet:
         if not isinstance(qs._where, list):
             qs._where = [qs._where]
 
-        qs._where.extend(args)
+        for arg in args:
+            qs._where.append(self._normalize_q(arg))
+
         if kwargs:
             qs._where.append(qs._process_auto_joins(kwargs))
         return qs
@@ -717,7 +809,9 @@ class AsyncQuerySet:
         if not isinstance(qs._exclude, list):
             qs._exclude = [qs._exclude]
 
-        qs._exclude.extend(args)
+        for arg in args:
+            qs._exclude.append(self._normalize_q(arg))
+
         if kwargs:
             qs._exclude.append(qs._process_auto_joins(kwargs))
         return qs

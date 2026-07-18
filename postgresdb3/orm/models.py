@@ -118,10 +118,17 @@ class Model(BaseModel, metaclass=ModelMeta):
     def create(cls, **kwargs):
         cls._check_setup()
 
-        if not kwargs:
-            for key, field in cls._fields.items():
-                if key not in kwargs and field.default is not None:
-                    kwargs[key] = field.default
+        kwargs = cls._normalize_kwargs(kwargs)
+        kwargs = {
+            k: v for k, v in kwargs.items()
+            if not (cls._fields.get(k) and not cls._fields[k].to_sql())
+        }
+
+        for key, field in cls._fields.items():
+            if not field.to_sql():
+                continue
+            if key not in kwargs and field.default is not None:
+                kwargs[key] = field.default
 
         if not kwargs:
             raise ValueError("Create requires at least one field to insert")
@@ -149,6 +156,7 @@ class Model(BaseModel, metaclass=ModelMeta):
             k
             for k, f in cls._fields.items()
             if not (f.primary_key and f.sql_type in ("SERIAL", "BIGSERIAL"))
+            and f.to_sql()
         ]
 
         values_list = []
@@ -188,6 +196,8 @@ class Model(BaseModel, metaclass=ModelMeta):
 
     def clean(self):
         for field_name, field in self.__class__._fields.items():
+            if not field.to_sql():
+                continue
             value = getattr(self, field_name, None)
             if hasattr(field, "validate"):
                 setattr(self, field_name, field.validate(value))
@@ -218,17 +228,19 @@ class Model(BaseModel, metaclass=ModelMeta):
                 data.pop(pk_name, None)
 
             created = self.__class__.create(**data)
-            for field_name in self.__class__._fields:
-                setattr(self, field_name, getattr(created, field_name, None))
+            for field_name, field in self.__class__._fields.items():
+                if field.to_sql():
+                    setattr(self, field_name, getattr(created, field_name, None))
             self.after_save(created=True)
             return self
 
         data = {}
-        for field_name in self.__class__._fields:
-            if field_name == pk_name:
+        for field_name, field in self.__class__._fields.items():
+            if field_name == pk_name or not field.to_sql():
                 continue
             data[field_name] = getattr(self, field_name, None)
 
+        data = self.__class__._normalize_kwargs(data)
         self.__class__.db.update_fields(self.__class__.table, data, pk_name, pk_value)
 
         self.after_save(created=False)
@@ -239,6 +251,8 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         if not kwargs:
             raise ValueError("Yangilash uchun kamida bitta ustun kerak")
+
+        kwargs = self.__class__._normalize_kwargs(kwargs)
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -398,7 +412,16 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
     async def create(cls, **kwargs):
         cls._check_setup()
 
+        # Remove keys that correspond to non-column fields (e.g., ManyToManyField)
+        kwargs = cls._normalize_kwargs(kwargs)
+        kwargs = {
+            k: v for k, v in kwargs.items()
+            if not (cls._fields.get(k) and not cls._fields[k].to_sql())
+        }
+
         for key, field in cls._fields.items():
+            if not field.to_sql():
+                continue
             if key not in kwargs and field.default is not None:
                 kwargs[key] = field.default
 
@@ -428,6 +451,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             k
             for k, f in cls._fields.items()
             if not (f.primary_key and f.sql_type in ("SERIAL", "BIGSERIAL"))
+            and f.to_sql()
         ]
 
         values_list = []
@@ -469,6 +493,8 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
     async def clean(self):
         for field_name, field in self.__class__._fields.items():
+            if not field.to_sql():
+                continue
             value = getattr(self, field_name, None)
             if hasattr(field, "validate"):
                 setattr(self, field_name, field.validate(value))
@@ -499,17 +525,19 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
                 data.pop(pk_name, None)
 
             created = await self.__class__.create(**data)
-            for field_name in self.__class__._fields:
-                setattr(self, field_name, getattr(created, field_name, None))
+            for field_name, field in self.__class__._fields.items():
+                if field.to_sql():
+                    setattr(self, field_name, getattr(created, field_name, None))
             await self.after_save(created=True)
             return self
 
         data = {}
-        for field_name in self.__class__._fields:
-            if field_name == pk_name:
+        for field_name, field in self.__class__._fields.items():
+            if field_name == pk_name or not field.to_sql():
                 continue
             data[field_name] = getattr(self, field_name, None)
 
+        data = self.__class__._normalize_kwargs(data)
         await self.__class__.db.update_fields(
             self.__class__.table, data, pk_name, pk_value
         )
@@ -522,6 +550,8 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
         if not kwargs:
             raise ValueError("Yangilash uchun kamida bitta ustun kerak")
+
+        kwargs = self.__class__._normalize_kwargs(kwargs)
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)

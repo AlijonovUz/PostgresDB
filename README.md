@@ -13,7 +13,8 @@
 6. [Model Metodlari va Hooklar (Hooks)](#6-model-metodlari-va-hooklar-hooks)
 7. [CRUD Operatsiyalari](#7-crud-operatsiyalari)
 8. [QuerySet API (Qidiruv va Filtrlash)](#8-queryset-api-qidiruv-va-filtrlash)
-9. [Migratsiya Tizimi (CLI va Kod orqali)](#9-migratsiya-tizimi-cli-va-kod-orqali)
+9. [Aloqalar bilan ishlash (Relationships)](#9-aloqalar-bilan-ishlash-relationships)
+10. [Migratsiya Tizimi (CLI va Kod orqali)](#10-migratsiya-tizimi-cli-va-kod-orqali)
 
 ---
 
@@ -486,7 +487,116 @@ records = await AsyncUser.db._manager("SELECT name, balance FROM users WHERE age
 
 ---
 
-## 9. Migratsiya Tizimi (CLI va Kod orqali)
+## 9. Aloqalar bilan ishlash (Relationships)
+
+PostgresDB3 munosabatlarni to'g'ri o'rnatish, ma'lumotlarni bog'lash, so'rovlarni avtomatik optimallashtirish va Django-style qulayliklarni qo'llab-quvvatlaydi.
+
+### A) Sinxron modellarda aloqalar bilan ishlash (`Model`)
+
+#### 1. ForeignKey (One-to-Many) va OneToOneField (Birga-bir)
+Kutubxona maydon nomini avtomatik tarzda database ustuniga (`_id` qo'shimchasi bilan) xaritlaydi va descriptorlar orqali aloqalarni boshqaradi.
+
+```python
+# Modellar:
+class User(Model):
+    table = "users"
+    name = String()
+
+class Order(Model):
+    table = "orders"
+    user = ForeignKey(User)  # Bazada 'user_id' ustuni yaratiladi
+    amount = Integer()
+
+# Ma'lumot qo'shish (Django-style, obyektning o'zini uzatish):
+new_user = User.create(name="Ali")
+order = Order.create(user=new_user, amount=50000)
+
+# Yoki ID orqali saqlash:
+order = Order.create(user_id=new_user.id, amount=50000)
+
+# Bog'langan model ma'lumotini o'qish (Lazy Loading):
+fetched_order = Order.filter(id=order.id).first()
+related_user = fetched_order.user  # Bazadan avtomatik yuklanadi
+print(related_user.name)  # Ali
+```
+
+#### 2. ManyToManyField (Ko'pga-ko'p)
+ManyToMany munosabatlarida bog'liqliklar uchinchi oraliq jadvalda (`{table1}_{table2}`) saqlanadi va ularni boshqarish uchun `.add()`, `.remove()`, `.clear()` va `.all()` metodlaridan foydalaniladi.
+
+```python
+# Modellar:
+class Tag(Model):
+    table = "tags"
+    name = String()
+
+class Product(Model):
+    table = "products"
+    tags = ManyToManyField(Tag)
+    price = Integer()
+
+product = Product.create(price=15000)
+tag_new = Tag.create(name="Yangi")
+tag_sale = Tag.create(name="Chegirma")
+
+# Bog'lash (Obyektlar yoki ID-lar orqali):
+product.tags.add(tag_new, tag_sale)
+
+# Bog'liqlikni o'chirish:
+product.tags.remove(tag_new)
+
+# Barcha bog'langan teglarni o'qish:
+tags = product.tags.all()
+
+# Barcha bog'liqliklarni tozalash:
+product.tags.clear()
+```
+
+---
+
+### B) Asinxron modellarda aloqalar bilan ishlash (`AsyncModel`)
+
+Asinxron rejimda aloqalar va metodlar `await` orqali ishlatilishi lozim.
+
+#### 1. ForeignKey va Lazy Loading
+```python
+# Modellar:
+class AsyncUser(AsyncModel):
+    table = "users"
+    name = String()
+
+class AsyncOrder(AsyncModel):
+    table = "orders"
+    user = ForeignKey(AsyncUser)
+    amount = Integer()
+
+# Asinxron yozuv yaratish:
+user = await AsyncUser.create(name="Ali (Async)")
+order = await AsyncOrder.create(user=user, amount=120000)
+
+# Asinxron Lazy Loading (e'tibor bering, bog'lanish await qilinadi):
+fetched_order = await AsyncOrder.filter(id=order.id).first()
+related_user = await fetched_order.user  # COROUTINE obyekti await qilinadi
+print(related_user.name)
+```
+
+#### 2. ManyToManyField
+```python
+# Asinxron bog'lanish qo'shish:
+await product.tags.add(tag1, tag2)
+
+# Asinxron bog'lanish o'chirish:
+await product.tags.remove(tag1)
+
+# Asinxron barcha bog'liqliklarni o'qib olish:
+tags = await product.tags.all()
+
+# Asinxron tozalash:
+await product.tags.clear()
+```
+
+---
+
+## 10. Migratsiya Tizimi (CLI va Kod orqali)
 
 PostgresDB3 o'z ichida model o'zgarishlarini kuzatib boruvchi va bazadagi jadvallarni avtomatik yangilovchi migratsiya dvigateliga ega.
 

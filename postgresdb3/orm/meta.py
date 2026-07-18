@@ -26,6 +26,14 @@ class ModelMeta(type):
 
         for key, value in attrs.items():
             if isinstance(value, Field):
+                if isinstance(value, ForeignKey) and not isinstance(value, ManyToManyField):
+                    if not key.endswith("_id"):
+                        new_key = f"{key}_id"
+                        value.name = new_key
+                        fields[new_key] = value
+                        field_names_to_remove.append(key)
+                        continue
+
                 value.name = key
                 fields[key] = value
                 field_names_to_remove.append(key)

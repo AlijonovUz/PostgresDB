@@ -6,6 +6,8 @@ class BaseModel:
 
     def __init__(self, **kwargs):
         for field_name, field in self._fields.items():
+            if not field.to_sql():
+                continue
             if field_name in kwargs:
                 val = kwargs[field_name]
             else:
@@ -32,8 +34,9 @@ class BaseModel:
         return repr(self)
 
     def __iter__(self):
-        for field in self._fields:
-            yield field, getattr(self, field, None)
+        for field_name, field in self._fields.items():
+            if field.to_sql():
+                yield field_name, getattr(self, field_name, None)
 
     def __getitem__(self, item):
         return getattr(self, item)
@@ -96,13 +99,30 @@ class BaseModel:
                 return name
         return cls.pk
 
+    @classmethod
+    def _normalize_kwargs(cls, kwargs):
+        normalized = {}
+        for k, v in kwargs.items():
+            if hasattr(cls, k):
+                desc = getattr(cls, k)
+                if hasattr(desc, "field_name"):
+                    k = desc.field_name
+            if hasattr(v, "get_pk_name"):
+                v = getattr(v, v.get_pk_name(), v)
+            normalized[k] = v
+        return normalized
+
     def to_dict(self):
         return {
-            field_name: getattr(self, field_name, None) for field_name in self._fields
+            field_name: getattr(self, field_name, None)
+            for field_name, field in self._fields.items()
+            if field.to_sql()
         }
 
     def __repr__(self):
         fields = ", ".join(
-            f"{name}={getattr(self, name, None)!r}" for name in self._fields
+            f"{name}={getattr(self, name, None)!r}"
+            for name, field in self._fields.items()
+            if field.to_sql()
         )
         return f"<{self.__class__.__name__} {fields}>"
