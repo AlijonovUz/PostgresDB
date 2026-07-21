@@ -1,3 +1,4 @@
+from __future__ import annotations
 from typing import Any, Optional
 import psycopg2
 from psycopg2 import pool

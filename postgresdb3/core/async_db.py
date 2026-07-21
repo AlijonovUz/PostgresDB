@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncpg
 import asyncio
 from typing import Any, List, Optional
