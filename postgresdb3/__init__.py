@@ -1,6 +1,8 @@
 from .core import PostgresDB, AsyncPostgresDB
 from .migrations.engine import MigrationEngine
+from .orm.models import Model, AsyncModel
 from .orm.expressions import Q, F, Sum, Avg, Min, Max, Count
+from .orm.indexes import Index
 from .orm.fields import (
     String,
     Integer,

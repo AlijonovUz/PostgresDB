@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 from postgresdb3.orm.meta import model_registry
+from postgresdb3.orm.indexes import Index
 
 
 class MigrationEngine:
@@ -30,7 +31,12 @@ class MigrationEngine:
                 ordered_fields.update(fields)
                 fields = ordered_fields
 
-            meta_options = getattr(model, "_meta_options", {})
+            meta_options = getattr(model, "_meta_options", {}).copy()
+            if "indexes" in meta_options:
+                meta_options["indexes"] = [
+                    idx.to_dict() if isinstance(idx, Index) else idx
+                    for idx in meta_options["indexes"]
+                ]
             state[table_name] = {"fields": fields, "meta_options": meta_options}
         return state
 
@@ -81,6 +87,12 @@ class MigrationEngine:
                         f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({', '.join(cols_tuple)});"
                     )
                     reverse_operations.append(f"DROP INDEX IF EXISTS {idx_name};")
+
+                indexes = meta_options.get("indexes", [])
+                for idx in indexes:
+                    idx_obj = idx if isinstance(idx, Index) else Index.from_dict(idx)
+                    operations.append(idx_obj.to_sql(table))
+                    reverse_operations.append(idx_obj.to_drop_sql(table))
             else:
                 prev_data = previous_state[table]
                 if isinstance(prev_data, dict) and "fields" not in prev_data:
@@ -221,6 +233,28 @@ class MigrationEngine:
                             f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({', '.join(cols_tuple)});"
                         )
 
+                prev_indexes_raw = prev_meta.get("indexes", [])
+                prev_indexes = [
+                    idx if isinstance(idx, Index) else Index.from_dict(idx)
+                    for idx in prev_indexes_raw
+                ]
+
+                curr_indexes_raw = meta_options.get("indexes", [])
+                curr_indexes = [
+                    idx if isinstance(idx, Index) else Index.from_dict(idx)
+                    for idx in curr_indexes_raw
+                ]
+
+                for idx in curr_indexes:
+                    if idx not in prev_indexes:
+                        operations.append(idx.to_sql(table))
+                        reverse_operations.append(idx.to_drop_sql(table))
+
+                for idx in prev_indexes:
+                    if idx not in curr_indexes:
+                        operations.append(idx.to_drop_sql(table))
+                        reverse_operations.append(idx.to_sql(table))
+
         for table, prev_data in previous_state.items():
             if isinstance(prev_data, dict) and "fields" not in prev_data:
                 prev_fields = prev_data
@@ -259,6 +293,12 @@ class MigrationEngine:
                     reverse_operations.append(
                         f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({', '.join(cols_tuple)});"
                     )
+
+                indexes = prev_meta.get("indexes", [])
+                for idx in indexes:
+                    idx_obj = idx if isinstance(idx, Index) else Index.from_dict(idx)
+                    reverse_operations.append(idx_obj.to_sql(table))
+
             else:
                 curr_fields = current_state[table]["fields"]
                 for field_name in prev_fields:

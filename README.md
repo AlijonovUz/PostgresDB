@@ -94,7 +94,26 @@ class AsyncCategory(AsyncModel):
 * `ordering` (list/tuple): Standart saralash tartibi (masalan: `ordering = ["-created_at", "id"]`). Bu filtrlashda avtomatik ravishda `ORDER BY created_at DESC, id ASC` ko'rinishida qo'llanadi.
 * `unique_together` (tuple): Bir nechta maydonlarning birgalikdagi takrorlanmasligi sharti.
 * `index_together` (tuple): Birgalikda indeks yaratiladigan maydonlar guruhi.
+* `indexes` (list): Django uslubidagi murakkab indekslar ro'yxati (`Index(fields=[...], name=..., unique=..., using=..., condition=..., include=[...])`).
 * `verbose_name` / `verbose_name_plural` (str): Modelning inson tushunadigan tildagi yakka/ko'plik nomi.
+
+#### Indekslar bilan ishlash (`Index`):
+```python
+from postgresdb3 import Model, String, Integer, Index
+
+class Product(Model):
+    category = String(length=50)
+    price = Integer()
+    status = String(length=20)
+
+    class Meta:
+        indexes = [
+            Index(fields=["category", "price"], name="idx_prod_cat_price"), # Ko'p ustunli indeks
+            Index(fields=["-price"], name="idx_prod_price_desc"),           # Kamayish tartibidagi (DESC) indeks
+            Index(fields=["status"], condition="status = 'active'"),        # Qisman (partial) indeks
+            Index(fields=["category"], using="gin"),                        # Indeks turi (btree, hash, gin, gist)
+        ]
+```
 
 #### Meta Merosxo'rligi (Meta Inheritance):
 Ota model (Parent class) abstract bo'lsa, undan meros oluvchi subclasslar avtomatik tarzda ota klassning Meta xususiyatlarini (masalan, `ordering`, `unique_together` kabi) meros qilib oladi. Agar siz ota klass Meta xususiyatlarini saqlagan holda qo'shimcha qilmoqchi bo'lsangiz, Python'ning standart merosxo'rlik sintaksisidan foydalanishingiz mumkin:

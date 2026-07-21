@@ -1,4 +1,5 @@
 from .fields import Field, ForeignKey, OneToOneField, ManyToManyField
+from .indexes import Index
 from .relations import (
     ForeignKeyRelation,
     ReverseRelation,
@@ -65,6 +66,17 @@ class ModelMeta(type):
                 meta_options["unique_together"] = meta_class.unique_together
             if hasattr(meta_class, "index_together"):
                 meta_options["index_together"] = meta_class.index_together
+            if hasattr(meta_class, "indexes"):
+                raw_indexes = meta_class.indexes
+                parsed_indexes = []
+                for idx in raw_indexes:
+                    if isinstance(idx, Index):
+                        parsed_indexes.append(idx)
+                    elif isinstance(idx, (list, tuple)):
+                        parsed_indexes.append(Index(fields=idx))
+                    elif isinstance(idx, dict):
+                        parsed_indexes.append(Index.from_dict(idx))
+                meta_options["indexes"] = parsed_indexes
             if hasattr(meta_class, "ordering"):
                 meta_options["ordering"] = meta_class.ordering
             if hasattr(meta_class, "abstract"):
@@ -76,7 +88,9 @@ class ModelMeta(type):
 
         meta_options.setdefault("unique_together", ())
         meta_options.setdefault("index_together", ())
+        meta_options.setdefault("indexes", [])
         meta_options.setdefault("ordering", ())
+
         meta_options.setdefault("abstract", False)
         meta_options.setdefault("verbose_name", name.lower())
         meta_options.setdefault(
