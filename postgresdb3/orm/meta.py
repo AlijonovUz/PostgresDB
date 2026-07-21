@@ -47,7 +47,6 @@ class ModelMeta(type):
         meta_class = attrs.pop("Meta", None)
         meta_options = {}
 
-        # Parent klasslarning Meta qiymatlarini meros qilib olamiz (faqat abstract bo'lmagan xususiyatlarni)
         for base in bases:
             base_meta = getattr(base, "_meta_options", None)
             if base_meta:

@@ -5,7 +5,6 @@ from postgresdb3.orm.validators import ValidationError
 class String(Field):
 
     def __init__(self, verbose_name=None, length=255, **kwargs):
-        # Agar birinchi argument butun son bo'lsa, demak uzunlik (length) berilgan
         if isinstance(verbose_name, int):
             length = verbose_name
             verbose_name = None

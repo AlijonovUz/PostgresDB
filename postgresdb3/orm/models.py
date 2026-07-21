@@ -412,7 +412,6 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
     async def create(cls, **kwargs):
         cls._check_setup()
 
-        # Remove keys that correspond to non-column fields (e.g., ManyToManyField)
         kwargs = cls._normalize_kwargs(kwargs)
         kwargs = {
             k: v for k, v in kwargs.items()

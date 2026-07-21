@@ -32,14 +32,14 @@ else:
 
 setup(
     name="postgresdb3",
-    version="2.2.0",
+    version="2.2.1",
     packages=find_packages(),
     install_requires=[
         psycopg_dependency,
         "asyncpg>=0.31.0"
     ],
     author="Abdulbosit Alijonov",
-    description="High-Performance Sync and Async PostgreSQL ORM for Python",
+    description="Python uchun mo'ljallangan, sinxron va asinxron ishlashni qo'llab-quvvatlaydigan o'ta tezkor va yengil PostgreSQL ORM kutubxonasi",
     long_description=long_description,
     long_description_content_type="text/markdown",
     project_urls={
