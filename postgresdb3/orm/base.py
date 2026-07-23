@@ -239,6 +239,21 @@ class BaseModel:
                 pydantic_field_obj,
             )
 
+        pk_name = cls.get_pk_name()
+        if (
+            isinstance(pk_name, str)
+            and pk_name not in cls._fields
+            and pk_name not in exclude_set
+            and (include_set is None or pk_name in include_set)
+        ):
+            pk_type = typing.Optional[int]
+            if make_all_optional or (optional_set and pk_name in optional_set):
+                pk_default = None
+            else:
+                pk_default = None
+            pk_field_obj = PydanticField(default=pk_default)
+            fields_dict = {pk_name: (pk_type, pk_field_obj), **fields_dict}
+
         return create_model(model_name, **fields_dict)
 
     @classmethod
