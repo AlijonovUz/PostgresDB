@@ -36,7 +36,7 @@ PostgresDB3 sinxron va asinxron ulanishlarni alohida dvigatellar yordamida amalg
 
 ### Sinxron ulanish (`PostgresDB`)
 ```python
-from postgresdb3 import PostgresDB
+from postgresdb3 import PostgresDB, Model
 
 db_sync = PostgresDB(
     database="my_db",
@@ -48,11 +48,14 @@ db_sync = PostgresDB(
     maxconn=20,  # Maksimal ulanishlar soni
     echo=True    # SQL so'rovlarini terminalga chiqarish (Debug)
 )
+
+# Sinxron modellar uchun bazani biriktirish
+Model.db = db_sync
 ```
 
 ### Asinxron ulanish (`AsyncPostgresDB`)
 ```python
-from postgresdb3 import AsyncPostgresDB
+from postgresdb3 import AsyncPostgresDB, AsyncModel
 
 db_async = AsyncPostgresDB(
     database="my_db",
@@ -64,7 +67,13 @@ db_async = AsyncPostgresDB(
     max_size=20,
     echo=True
 )
+
+# Asinxron modellar uchun bazani biriktirish (SHART!)
+AsyncModel.db = db_async
 ```
+
+> ⚠️ **MUHIM ESLAТМА:**
+> `PostgresDB` yoki `AsyncPostgresDB` obyektini yaratgandan so'ng, uni `Model.db = db_sync` yoki `AsyncModel.db = db_async` deb modellaringizga biriktirishingiz **SHART**. Aks holda, modellardan foydalanganda `ValueError: <ModelName>.db belgilanmagan` xatoligi yuzaga keladi. Bir nechta ma'lumotlar bazasi bilan ishlash imkoniyatini ta'minlash uchun kutubxona bazani avtomatik biriktirmaydi.
 
 ---
 
@@ -75,6 +84,10 @@ Sizning modellariz bazadagi jadvallarni ifodalaydi. Sinxron modellar `Model` kla
 ```python
 from postgresdb3.orm.models import Model, AsyncModel
 from postgresdb3 import String, Integer
+
+# 1. Baza ulanishini modellarga biriktiramiz
+Model.db = db_sync
+AsyncModel.db = db_async
 
 # Sinxron model
 class Category(Model):
