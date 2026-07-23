@@ -39,7 +39,7 @@ else:
 
 setup(
     name="postgresdb3",
-    version="3.0.0",
+    version="3.0.1",
     packages=find_packages(),
     install_requires=[psycopg_dependency, "asyncpg>=0.31.0"],
     author="Abdulbosit Alijonov",
