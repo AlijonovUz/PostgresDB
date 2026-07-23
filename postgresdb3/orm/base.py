@@ -145,10 +145,16 @@ class BaseModel:
         return f"<{self.__class__.__name__} {fields}>"
 
     @classmethod
-    def to_pydantic(cls, name=None, exclude=None, include=None):
+    def to_pydantic(cls, name=None, exclude=None, include=None, optional=None):
         """
         Model ma'lumotlari, tiplari va cheklovlaridan kelib chiqib dynamic Pydantic BaseModel yaratadi.
         FastAPI bilan ishlashda response_model va request body uchun xizmat qiladi.
+
+        :param name: Yaratiladigan Pydantic modelining nomi.
+        :param exclude: Sxemadan chiqarib tashlanadigan maydonlar ro'yxati.
+        :param include: Sxemaga kiritiladigan maydonlar ro'yxati.
+        :param optional: Ixtiyoriy (Optional/None) qilinadigan maydonlar ro'yxati (list/tuple),
+                         yoki True bo'lsa barcha maydonlar ixtiyoriy qilinadi (PATCH so'rovlari uchun).
         """
         try:
             import pydantic
@@ -165,6 +171,8 @@ class BaseModel:
         exclude_set = set(exclude or [])
 
         include_set = set(include) if include is not None else None
+        optional_set = set(optional) if isinstance(optional, (list, tuple, set)) else None
+        make_all_optional = optional is True or optional == "__all__"
 
         for field_name, field in cls._fields.items():
             if not field.to_sql():
@@ -180,10 +188,28 @@ class BaseModel:
             if getattr(field, "length", None):
                 field_kwargs["max_length"] = field.length
 
+            is_optional = (
+                field.nullable
+                or make_all_optional
+                or (optional_set is not None and field_name in optional_set)
+            )
+
             default_val = ...
-            if field.nullable:
+            if is_optional:
                 py_type = typing.Optional[py_type]
                 default_val = None
+
+            if not make_all_optional and getattr(field, "default", None) is not None:
+                if callable(field.default):
+                    field_kwargs["default_factory"] = field.default
+                    default_val = None
+                elif field.default not in (
+                    "CURRENT_DATE",
+                    "CURRENT_TIME",
+                    "CURRENT_TIMESTAMP",
+                    "NOW()",
+                ):
+                    default_val = field.default
 
             if getattr(field, "validators", None):
                 try:
@@ -210,9 +236,14 @@ class BaseModel:
                 except Exception:
                     pass
 
+            if "default_factory" in field_kwargs:
+                pydantic_field_obj = PydanticField(**field_kwargs)
+            else:
+                pydantic_field_obj = PydanticField(default=default_val, **field_kwargs)
+
             fields_dict[field_name] = (
                 py_type,
-                PydanticField(default=default_val, **field_kwargs),
+                pydantic_field_obj,
             )
 
         return create_model(model_name, **fields_dict)

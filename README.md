@@ -142,6 +142,12 @@ UserPublicSchema = User.to_pydantic(exclude=["password", "id"])
 
 # 4. Faqat belgilangan ustunlarni kiritish:
 UserSimpleSchema = User.to_pydantic(include=["username", "email"])
+
+# 5. Belgilangan maydonlarni ixtiyoriy (Optional/None) qilish:
+UserUpdateSchema = User.to_pydantic(exclude=["id"], optional=["email", "username"])
+
+# 6. PATCH so'rovi uchun barcha maydonlarni ixtiyoriy qilish (optional=True):
+UserPatchSchema = User.to_pydantic(name="UserPatch", exclude=["id"], optional=True)
 ```
 
 ---

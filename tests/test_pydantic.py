@@ -56,6 +56,29 @@ class TestPydanticSchemaGeneration(unittest.TestCase):
         self.assertIn("age", UserSimpleSchema.model_fields)
         self.assertNotIn("email", UserSimpleSchema.model_fields)
 
+        # 5. Optional Parameter Schema (Specific fields)
+        UserPartialSchema = User.to_pydantic(
+            name="UserPartialSchema", exclude=["id"], optional=["email", "username"]
+        )
+        # Email and username are now optional (can instantiate without them)
+        patch_obj = UserPartialSchema(password="secret")
+        self.assertIsNone(patch_obj.username)
+        self.assertIsNone(patch_obj.email)
+
+        # 6. Optional=True (All fields optional - ideal for PATCH)
+        UserPatchSchema = User.to_pydantic(
+            name="UserPatchSchema", exclude=["id"], optional=True
+        )
+        patch_empty = UserPatchSchema()
+        self.assertIsNone(patch_empty.username)
+        self.assertIsNone(patch_empty.password)
+
+        # 7. Default value handling test
+        user_with_default = UserSchema(
+            id=2, username="bob", email="bob@test.com", password="pass"
+        )
+        self.assertEqual(user_with_default.age, 18)
+
     def test_pydantic_validators_integration(self):
         from postgresdb3.orm.validators import MinValueValidator, EmailValidator
         import pydantic
