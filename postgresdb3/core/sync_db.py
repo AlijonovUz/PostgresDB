@@ -121,6 +121,10 @@ class PostgresDB:
                         result = None
 
             return result
+        except Exception as e:
+            from postgresdb3.exceptions import translate_db_error
+
+            raise translate_db_error(e) from e
         finally:
             if not in_transaction:
                 self.pool.putconn(conn)
@@ -602,28 +606,35 @@ class PostgresDB:
 
     @contextmanager
     def transaction(self):
+        from postgresdb3.exceptions import translate_db_error
+
         existing_conn = getattr(self._local, "conn", None)
         if existing_conn:
             yield existing_conn
             return
 
-        while True:
-            conn = self.pool.getconn()
-            if self.ping_connections:
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT 1")
+        try:
+            while True:
+                conn = self.pool.getconn()
+                if self.ping_connections:
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT 1")
+                        break
+                    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+                        self.pool.putconn(conn, close=True)
+                else:
                     break
-                except (psycopg2.InterfaceError, psycopg2.OperationalError):
-                    self.pool.putconn(conn, close=True)
-            else:
-                break
+        except Exception as e:
+            raise translate_db_error(e) from e
 
         conn.autocommit = True
         self._local.conn = conn
         try:
             with conn:
                 yield conn
+        except Exception as e:
+            raise translate_db_error(e) from e
         finally:
             self._local.conn = None
             self.pool.putconn(conn)

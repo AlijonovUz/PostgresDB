@@ -20,8 +20,11 @@ class Model(BaseModel, metaclass=ModelMeta):
         return cls.query().all()
 
     @classmethod
-    def find(cls, pk):
-        return cls.query().filter(**{cls.get_pk_name(): pk}).first()
+    def find(cls, pk=None, id=None):
+        search_id = pk if pk is not None else id
+        from .query import FindQuerySet
+
+        return FindQuerySet(cls, search_id)
 
     @classmethod
     def raw_sql(cls, sql: str, *params):
@@ -52,13 +55,15 @@ class Model(BaseModel, metaclass=ModelMeta):
 
     @classmethod
     def get(cls, **kwargs):
+        from postgresdb3.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+
         results = cls.filter(**kwargs).limit(2).all()
 
         if not results:
-            raise ValueError("Obyekt topilmadi")
+            raise ObjectDoesNotExist(f"{cls.__name__} obyekti topilmadi")
 
         if len(results) > 1:
-            raise ValueError("Bir nechta obyekt topildi")
+            raise MultipleObjectsReturned(f"Bir nechta {cls.__name__} obyekti topildi")
 
         return results[0]
 
@@ -354,8 +359,11 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         return await cls.query().all()
 
     @classmethod
-    async def find(cls, pk):
-        return await cls.query().filter(**{cls.get_pk_name(): pk}).first()
+    def find(cls, pk=None, id=None):
+        search_id = pk if pk is not None else id
+        from .query import AsyncFindQuerySet
+
+        return AsyncFindQuerySet(cls, search_id)
 
     @classmethod
     async def raw_sql(cls, sql: str, *params):
@@ -386,13 +394,15 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
     @classmethod
     async def get(cls, **kwargs):
+        from postgresdb3.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+
         results = await cls.filter(**kwargs).limit(2).all()
 
         if not results:
-            raise ValueError("Obyekt topilmadi")
+            raise ObjectDoesNotExist(f"{cls.__name__} obyekti topilmadi")
 
         if len(results) > 1:
-            raise ValueError("Bir nechta obyekt topildi")
+            raise MultipleObjectsReturned(f"Bir nechta {cls.__name__} obyekti topildi")
 
         return results[0]
 

@@ -11,7 +11,7 @@ class ForeignKeyRelation:
         if fk_value is None:
             return None
 
-        return self.related_model.find(fk_value)
+        return self.related_model.find(fk_value).first()
 
     def __set__(self, instance, value):
         if value is not None:

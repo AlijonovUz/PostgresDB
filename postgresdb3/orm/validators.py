@@ -1,9 +1,10 @@
 from __future__ import annotations
 import re
 from typing import Any, Callable
+from postgresdb3.exceptions import PostgresDBError
 
 
-class ValidationError(Exception):
+class ValidationError(PostgresDBError, ValueError):
     """Validation xatoligi yuz berganda chaqiriladigan xatolik klassi."""
 
     def __init__(self, message: str) -> None:

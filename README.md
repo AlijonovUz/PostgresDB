@@ -15,6 +15,7 @@
 8. [QuerySet API (Qidiruv va Filtrlash)](#8-queryset-api-qidiruv-va-filtrlash)
 9. [Aloqalar bilan ishlash (Relationships)](#9-aloqalar-bilan-ishlash-relationships)
 10. [Migratsiya Tizimi (CLI va Kod orqali)](#10-migratsiya-tizimi-cli-va-kod-orqali)
+11. [Xatoliklar va Exceptionlar (Error Handling)](#11-xatoliklar-va-exceptionlar-error-handling)
 
 ---
 
@@ -292,6 +293,26 @@ user = User.query().filter(id=1).first()
 user = await AsyncUser.query().filter(id=1).first()
 ```
 
+### Primary Key bo'yicha tezkor qidiruv (`.find()`)
+Modelning `.find()` metodi primary key bo'yicha yozuvni tezkor topish, yangilash va o'chirish imkonini beradi. U pozitsion argument, `pk=` hamda `id=` parametrlarini qabul qiladi:
+
+```python
+# 1. Primary key bo'yicha topish:
+user = User.find(1)        # Pozitsion argument
+user = User.find(pk=1)     # pk kalit so'zi
+user = User.find(id=1)     # id kalit so'zi
+
+user = await AsyncUser.find(1)
+
+# 2. .find() dan so'ng to'g'ridan-to'g'ri yangilash (.update):
+User.find(1).update(name="Yangi Ism")
+await AsyncUser.find(1).update(name="Yangi Ism")
+
+# 3. .find() dan so'ng to'g'ridan-to'g'ri o'chirish (.delete):
+User.find(1).delete()
+await AsyncUser.find(1).delete()
+```
+
 ### Yozuv Yangilash (Update)
 ```python
 # Sinxron:
@@ -319,6 +340,7 @@ await user.delete()
 QuerySet orqali bazadan ma'lumotlarni turli shartlar bilan filtrlash, tartiblash va optimallashtirish amalga oshiriladi.
 
 ### Asosiy qidiruv metodlari:
+* **`.find(pk=None, id=None)`**: Primary key (`pk` / `id`) bo'yicha qidirish. Keyinchalik bevosita `.update(...)` va `.delete()` amallarini bajarish mumkin.
 * `.filter(*args, **kwargs)`: Shartga mos yozuvlarni olish.
 * `.exclude(*args, **kwargs)`: Shartga mos bo'lmagan yozuvlarni olish.
 * `.order_by(field)`: Tartiblash (teskari tartiblash uchun boshiga `-` qo'yiladi: `-age`).
@@ -682,6 +704,74 @@ await engine.async_migrate(db_async)
 # 4. Sinxron/Asinxron migratsiyani orqaga qaytarish
 engine.undo_migration(db_sync)
 await engine.async_undo_migration(db_async)
+```
+
+---
+
+## 11. Xatoliklar va Exceptionlar (Error Handling)
+
+PostgresDB3 barcha ma'lumotlar bazasi va ORM xatoliklarini ushlash va boshqarish uchun maxsus iyerarxik Exception sinflarini taqdim etadi:
+
+```python
+from postgresdb3 import (
+    PostgresDBError,          # Barcha ORM xatoliklarining ota sinfi
+    DatabaseError,           # Ma'lumotlar bazasi so'rovlari xatoligi
+    IntegrityError,          # Cheklovlar (constraint) buzilishi
+    UniqueViolationError,     # UNIQUE takrorlanmaslik cheklovi buzilishi
+    ForeignKeyViolationError, # FOREIGN KEY tashqi kalit cheklovi buzilishi
+    NotNullViolationError,    # NOT NULL bo'sh bo'lmaslik cheklovi buzilishi
+    CheckViolationError,      # CHECK sharti buzilishi
+    OperationalError,         # Ulanish uzilishi yoki bazaga ulana olmaslik
+    DataError,                # Noto'g me'yoriy ma'lumot turi yoki uzunligi
+    ProgrammingError,         # SQL sintaksis yoki jadval/ustun topilmasligi
+    TransactionError,         # Tranzaksiya roll-back xatoligi
+    ObjectDoesNotExist,       # .get() chaqirilganda obyekt topilmasligi (alias: DoesNotExist)
+    MultipleObjectsReturned,  # .get() chaqirilganda bir nechta obyekt qaytishi
+    ValidationError,          # Model validatorlaridan o'tmasligi
+    ModelSetupError,          # Model bazaga biriktirilmaganligi
+)
+```
+
+### Misollar:
+
+#### 1. Takroriy qiymat (Unique Violation) xatoligini ushlash:
+```python
+from postgresdb3 import UniqueViolationError
+
+try:
+    User.create(username="ali", email="ali@example.com")
+except UniqueViolationError as e:
+    print("Ushbu username yoki email allaqachon ro'yxatdan o'tgan!")
+```
+
+#### 2. Tashqi kalit (Foreign Key Violation) xatoligini ushlash:
+```python
+from postgresdb3 import ForeignKeyViolationError
+
+try:
+    Post.create(title="Post 1", user_id=999999) # Mavjud bo'lmagan user_id
+except ForeignKeyViolationError:
+    print("Bunday foydalanuvchi mavjud emas!")
+```
+
+#### 3. Obyekt topilmadi (`ObjectDoesNotExist` / `DoesNotExist`) xatoligi:
+```python
+from postgresdb3 import ObjectDoesNotExist, DoesNotExist
+
+try:
+    user = User.get(username="yoq_user")
+except DoesNotExist:
+    print("Foydalanuvchi topilmadi!")
+```
+
+#### 4. Barcha cheklov xatoliklarini bittada ushlash (`IntegrityError`):
+```python
+from postgresdb3 import IntegrityError
+
+try:
+    User.create(username="ali")
+except IntegrityError as e:
+    print(f"Ma'lumotlar bazasi cheklovi buzildi: {e}")
 ```
 
 ---

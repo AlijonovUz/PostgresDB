@@ -37,3 +37,21 @@ from .orm.validators import (
     EmailValidator,
 )
 from .cli import execute_from_command_line
+from .exceptions import (
+    PostgresDBError,
+    DatabaseError,
+    IntegrityError,
+    UniqueViolationError,
+    ForeignKeyViolationError,
+    NotNullViolationError,
+    CheckViolationError,
+    OperationalError,
+    DataError,
+    ProgrammingError,
+    TransactionError,
+    ObjectDoesNotExist,
+    DoesNotExist,
+    MultipleObjectsReturned,
+    ModelSetupError,
+)
+

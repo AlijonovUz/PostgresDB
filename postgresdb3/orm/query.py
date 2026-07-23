@@ -1229,3 +1229,82 @@ class AsyncQuerySet:
                         final_q &= ~Q(**e)
 
         return final_q if (final_q.conditions or final_q.children) else None
+
+
+class FindQuerySet(QuerySet):
+    """
+    Model.find(pk) orqali qaytariladigan so'rov obyekti.
+    To'g'ridan-to'g'ri update/delete chaqirish ham, model atributlariga murojaat qilish ham mumkin.
+    """
+
+    def __init__(self, model, pk_value):
+        super().__init__(model)
+        self.pk_value = pk_value
+        self._where = [{model.get_pk_name(): pk_value}]
+        self._instance = None
+        self._fetched = False
+
+    def _get_instance(self):
+        if not self._fetched:
+            self._instance = self.first()
+            self._fetched = True
+        return self._instance
+
+    def update(self, **kwargs):
+        res = super().update(**kwargs)
+        self._fetched = False
+        return res
+
+    def delete(self):
+        res = super().delete()
+        self._fetched = False
+        return res
+
+    def __getattr__(self, name):
+        if name in self.__dict__:
+            return self.__dict__[name]
+        inst = self._get_instance()
+        if inst is None:
+            raise AttributeError(
+                f"'{self.model.__name__}' object with {self.model.get_pk_name()}={self.pk_value} not found"
+            )
+        return getattr(inst, name)
+
+    def __bool__(self):
+        return self._get_instance() is not None
+
+    def __repr__(self):
+        inst = self._get_instance()
+        return repr(inst) if inst is not None else f"<{self.model.__name__}: None>"
+
+    def __eq__(self, other):
+        if other is None:
+            return self._get_instance() is None
+        inst = self._get_instance()
+        if inst is None:
+            return False
+        return inst == other
+
+
+class AsyncFindQuerySet(AsyncQuerySet):
+    """
+    AsyncModel.find(pk) orqali qaytariladigan asinxron so'rov obyekti.
+    await AsyncModel.find(pk) -> Model obyekti qaytaradi.
+    await AsyncModel.find(pk).update(...) -> yangilaydi.
+    await AsyncModel.find(pk).delete() -> o'chiradi.
+    """
+
+    def __init__(self, model, pk_value):
+        super().__init__(model)
+        self.pk_value = pk_value
+        self._where = [{model.get_pk_name(): pk_value}]
+
+    def __await__(self):
+        return self.first().__await__()
+
+    async def update(self, **kwargs):
+        return await super().update(**kwargs)
+
+    async def delete(self):
+        return await super().delete()
+

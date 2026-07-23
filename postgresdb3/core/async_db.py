@@ -116,6 +116,10 @@ class AsyncPostgresDB:
                 return await conn.fetchrow(sql, *params)
             if fetchall:
                 return await conn.fetch(sql, *params)
+        except Exception as e:
+            from postgresdb3.exceptions import translate_db_error
+
+            raise translate_db_error(e) from e
         finally:
             if not is_transaction:
                 await self.pool.release(conn)
@@ -564,31 +568,39 @@ class AsyncPostgresDB:
 
     @asynccontextmanager
     async def transaction(self):
+        from postgresdb3.exceptions import translate_db_error
+
         existing_conn = self._async_conn.get()
         if existing_conn:
             yield existing_conn
             return
 
-        if not self.pool:
-            if self._pool_lock is None:
-                self._pool_lock = asyncio.Lock()
-            async with self._pool_lock:
-                if not self.pool:
-                    self.pool = await asyncpg.create_pool(
-                        database=self.database,
-                        user=self.user,
-                        password=self.password,
-                        host=self.host,
-                        port=self.port,
-                        min_size=self.min_size,
-                        max_size=self.max_size,
-                    )
+        try:
+            if not self.pool:
+                if self._pool_lock is None:
+                    self._pool_lock = asyncio.Lock()
+                async with self._pool_lock:
+                    if not self.pool:
+                        self.pool = await asyncpg.create_pool(
+                            database=self.database,
+                            user=self.user,
+                            password=self.password,
+                            host=self.host,
+                            port=self.port,
+                            min_size=self.min_size,
+                            max_size=self.max_size,
+                        )
 
-        conn = await self.pool.acquire()
+            conn = await self.pool.acquire()
+        except Exception as e:
+            raise translate_db_error(e) from e
+
         token = self._async_conn.set(conn)
         try:
             async with conn.transaction():
                 yield conn
+        except Exception as e:
+            raise translate_db_error(e) from e
         finally:
             self._async_conn.reset(token)
             await self.pool.release(conn)

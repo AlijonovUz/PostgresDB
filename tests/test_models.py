@@ -73,6 +73,60 @@ class ModelsTestCase(unittest.TestCase):
         self.assertIsInstance(article.created_at_tz, datetime.datetime)
         self.assertIsInstance(article.updated_at, datetime.datetime)
 
+    def test_find_with_pk_and_id(self):
+        from unittest.mock import MagicMock, AsyncMock
+        import asyncio
+
+        class DummyModel(Model):
+            id = Integer(primary_key=True)
+            name = String()
+
+        DummyModel.db = MagicMock()
+        DummyModel.db._check_setup = MagicMock()
+
+        # Check pk / id assignment
+        qs1 = DummyModel.find(10)
+        self.assertEqual(qs1.pk_value, 10)
+
+        qs2 = DummyModel.find(pk=20)
+        self.assertEqual(qs2.pk_value, 20)
+
+        qs3 = DummyModel.find(id=30)
+        self.assertEqual(qs3.pk_value, 30)
+
+        # Check update and delete on find()
+        DummyModel.find(10).update(name="New Name")
+        self.assertTrue(DummyModel.db.update_where.called)
+
+        DummyModel.find(10).delete()
+        self.assertTrue(DummyModel.db.delete_where.called)
+
+        # Async tests
+        class AsyncDummyModel(AsyncModel):
+            id = Integer(primary_key=True)
+            name = String()
+
+        mock_db = MagicMock()
+        mock_db.update_where = AsyncMock(return_value=1)
+        mock_db.delete_where = AsyncMock(return_value=1)
+        mock_db.select = AsyncMock(return_value=None)
+        AsyncDummyModel.db = mock_db
+
+        async def run_async_tests():
+            qs_a = AsyncDummyModel.find(40)
+            self.assertEqual(qs_a.pk_value, 40)
+
+            await AsyncDummyModel.find(40).update(name="Async Name")
+            mock_db.update_where.assert_called()
+
+            await AsyncDummyModel.find(40).delete()
+            mock_db.delete_where.assert_called()
+
+        asyncio.run(run_async_tests())
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
+
