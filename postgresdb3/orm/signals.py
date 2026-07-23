@@ -31,7 +31,7 @@ class Signal:
             if not (r_id == lookup_key and r_sender == sender)
         ]
 
-    def send(self, sender: Any, **kwargs) -> list[tuple[Callable, Any]]:
+    def send(self, sender: Any, **kwargs) -> List[Tuple[Callable, Any]]:
         """
         Signalni sinxron chaqirish.
         """
@@ -53,7 +53,7 @@ class Signal:
                 responses.append((receiver, res))
         return responses
 
-    async def send_async(self, sender: Any, **kwargs) -> list[tuple[Callable, Any]]:
+    async def send_async(self, sender: Any, **kwargs) -> List[Tuple[Callable, Any]]:
         """
         Signalni asinxron chaqirish.
         """
@@ -80,7 +80,7 @@ pre_delete = Signal("pre_delete")
 post_delete = Signal("post_delete")
 
 
-def receiver(signal: Signal | list[Signal], sender: Optional[Any] = None):
+def receiver(signal: Union[Signal, List[Signal]], sender: Optional[Any] = None):
     """
     Signal receiver sifatida bezash uchun dekorator.
     """

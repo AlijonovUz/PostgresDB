@@ -5,7 +5,7 @@ from .orm.validators import ValidationError
 from .exceptions import PostgresDBError
 from .cli import execute_from_command_line
 
-__version__ = "3.0.1"
+__version__ = "3.0.2"
 
 __all__ = [
     "PostgresDB",

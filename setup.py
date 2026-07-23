@@ -39,9 +39,13 @@ else:
 
 setup(
     name="postgresdb3",
-    version="3.0.1",
+    version="3.0.2",
     packages=find_packages(),
-    install_requires=[psycopg_dependency, "asyncpg>=0.31.0"],
+    install_requires=[
+        psycopg_dependency,
+        "asyncpg>=0.31.0",
+        "pydantic>=2.0",
+    ],
     author="Abdulbosit Alijonov",
     description="Python uchun mo'ljallangan, sinxron va asinxron ishlashni qo'llab-quvvatlaydigan o'ta tezkor va yengil PostgreSQL ORM kutubxonasi",
     long_description=long_description,

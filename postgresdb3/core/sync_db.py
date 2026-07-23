@@ -1,9 +1,10 @@
+from __future__ import annotations
 import time
 import json
 import datetime
 import threading
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any, Optional, Union
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
@@ -47,13 +48,13 @@ class PostgresDB:
     def _manager(
         self,
         sql: str,
-        params: Optional[list | tuple] = None,
+        params: Optional[Union[list, tuple]] = None,
         *,
         commit: bool = False,
         many: bool = False,
         fetchone: bool = False,
         fetchall: bool = False,
-        fetchmany: int | None = None,
+        fetchmany: Optional[int] = None,
     ) -> Any:
         def _norm(v):
             if isinstance(v, dict):
