@@ -111,7 +111,6 @@ def translate_db_error(exc: Exception) -> Exception:
     if isinstance(exc, PostgresDBError):
         return exc
 
-    # Direct isinstance checks if asyncpg/psycopg2 are available
     try:
         import asyncpg.exceptions as a_exc
 
