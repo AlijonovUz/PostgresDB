@@ -55,6 +55,24 @@ class ModelsTestCase(unittest.TestCase):
         u2.after_save(created=True)
         self.assertEqual(saved_events, [("saved", True)])
 
+    def test_auto_now_and_auto_now_add_defaults(self):
+        import datetime
+        from postgresdb3 import Date, Time, Timestamp, Timestamptz
+
+        class Article(Model):
+            created_date = Date(auto_now_add=True)
+            created_time = Time(auto_now_add=True)
+            created_at = Timestamp(auto_now_add=True)
+            created_at_tz = Timestamptz(auto_now_add=True)
+            updated_at = Timestamp(auto_now=True)
+
+        article = Article()
+        self.assertIsInstance(article.created_date, datetime.date)
+        self.assertIsInstance(article.created_time, datetime.time)
+        self.assertIsInstance(article.created_at, datetime.datetime)
+        self.assertIsInstance(article.created_at_tz, datetime.datetime)
+        self.assertIsInstance(article.updated_at, datetime.datetime)
+
 
 if __name__ == "__main__":
     unittest.main()

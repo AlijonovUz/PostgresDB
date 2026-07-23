@@ -63,6 +63,27 @@ class AsyncPostgresDB:
             sql = re.sub(r"(?<!%)%s", repl, sql)
             sql = sql.replace("%%", "%")
 
+        def _norm(v):
+            if v in ("CURRENT_TIMESTAMP", "NOW()"):
+                import datetime
+
+                return datetime.datetime.now()
+            elif v == "CURRENT_DATE":
+                import datetime
+
+                return datetime.date.today()
+            elif v == "CURRENT_TIME":
+                import datetime
+
+                return datetime.datetime.now().time()
+            return v
+
+        if params:
+            if many and isinstance(params[0], (list, tuple)):
+                params = ([tuple(_norm(v) for v in row) for row in params[0]],)
+            else:
+                params = tuple(_norm(v) for v in params)
+
         if self.echo:
             print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
         if not self.pool:

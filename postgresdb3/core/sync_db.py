@@ -52,6 +52,30 @@ class PostgresDB:
         fetchmany: int | None = None,
     ) -> Any:
 
+        def _norm(v):
+            if v in ("CURRENT_TIMESTAMP", "NOW()"):
+                import datetime
+
+                return datetime.datetime.now()
+            elif v == "CURRENT_DATE":
+                import datetime
+
+                return datetime.date.today()
+            elif v == "CURRENT_TIME":
+                import datetime
+
+                return datetime.datetime.now().time()
+            return v
+
+        if params:
+            if many and isinstance(params, (list, tuple)):
+                params = [
+                    tuple(_norm(v) for v in row) if isinstance(row, (list, tuple)) else row
+                    for row in params
+                ]
+            elif isinstance(params, (list, tuple)):
+                params = tuple(_norm(v) for v in params)
+
         if self.echo:
             print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
 

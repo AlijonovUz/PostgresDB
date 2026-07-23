@@ -11,7 +11,7 @@ class BaseModel:
             if field_name in kwargs:
                 val = kwargs[field_name]
             else:
-                val = getattr(field, "default", None)
+                val = field.get_default_value()
 
             try:
                 setattr(self, field_name, val)

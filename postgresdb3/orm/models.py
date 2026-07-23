@@ -127,8 +127,13 @@ class Model(BaseModel, metaclass=ModelMeta):
         for key, field in cls._fields.items():
             if not field.to_sql():
                 continue
-            if key not in kwargs and field.default is not None:
-                kwargs[key] = field.default
+            if getattr(field, "auto_now", False):
+                kwargs[key] = field.get_current_value()
+            elif key not in kwargs or kwargs[key] is None or kwargs[key] in ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "NOW()"):
+                if getattr(field, "auto_now_add", False):
+                    kwargs[key] = field.get_current_value()
+                elif field.default is not None:
+                    kwargs[key] = field.get_default_value()
 
         if not kwargs:
             raise ValueError("Create requires at least one field to insert")
@@ -162,11 +167,14 @@ class Model(BaseModel, metaclass=ModelMeta):
         values_list = []
         for inst in instances:
             for col in columns:
-                if (
-                    getattr(inst, col, None) is None
-                    and cls._fields[col].default is not None
-                ):
-                    setattr(inst, col, cls._fields[col].default)
+                field = cls._fields[col]
+                if getattr(field, "auto_now", False):
+                    setattr(inst, col, field.get_current_value())
+                elif getattr(field, "auto_now_add", False):
+                    if getattr(inst, col, None) is None:
+                        setattr(inst, col, field.get_current_value())
+                elif getattr(inst, col, None) is None and field.default is not None:
+                    setattr(inst, col, field.get_default_value())
 
             val_tuple = tuple(getattr(inst, col, None) for col in columns)
             values_list.append(val_tuple)
@@ -181,12 +189,23 @@ class Model(BaseModel, metaclass=ModelMeta):
             return
 
         pk_name = cls.get_pk_name()
-        set_clause = ", ".join([f"{f} = %s" for f in fields])
+        auto_now_fields = [
+            k for k, f in cls._fields.items() if getattr(f, "auto_now", False)
+        ]
+        fields_to_update = list(fields)
+        for col in auto_now_fields:
+            if col not in fields_to_update and col != pk_name:
+                fields_to_update.append(col)
+
+        set_clause = ", ".join([f"{f} = %s" for f in fields_to_update])
         sql = f"UPDATE {cls.table} SET {set_clause} WHERE {pk_name} = %s"
 
         values_list = []
         for inst in instances:
-            val_tuple = tuple(getattr(inst, f, None) for f in fields) + (
+            for col in auto_now_fields:
+                val = cls._fields[col].get_current_value()
+                setattr(inst, col, val)
+            val_tuple = tuple(getattr(inst, f, None) for f in fields_to_update) + (
                 getattr(inst, pk_name),
             )
             values_list.append(val_tuple)
@@ -216,13 +235,21 @@ class Model(BaseModel, metaclass=ModelMeta):
 
     def save(self):
         self.__class__._check_setup()
-        self.clean()
-        self.before_save()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
 
         if pk_value is None:
+            for field_name, field in self.__class__._fields.items():
+                if getattr(field, "auto_now", False):
+                    setattr(self, field_name, field.get_current_value())
+                elif getattr(field, "auto_now_add", False):
+                    if getattr(self, field_name, None) is None:
+                        setattr(self, field_name, field.get_current_value())
+
+            self.clean()
+            self.before_save()
+
             data = self.to_dict()
             if data.get(pk_name) is None:
                 data.pop(pk_name, None)
@@ -233,6 +260,13 @@ class Model(BaseModel, metaclass=ModelMeta):
                     setattr(self, field_name, getattr(created, field_name, None))
             self.after_save(created=True)
             return self
+
+        for field_name, field in self.__class__._fields.items():
+            if getattr(field, "auto_now", False):
+                setattr(self, field_name, field.get_current_value())
+
+        self.clean()
+        self.before_save()
 
         data = {}
         for field_name, field in self.__class__._fields.items():
@@ -276,6 +310,12 @@ class Model(BaseModel, metaclass=ModelMeta):
                 ).FExpression,
             ):
                 setattr(self, key, value)
+
+        for key, field in self.__class__._fields.items():
+            if getattr(field, "auto_now", False) and key not in kwargs:
+                val = field.get_current_value()
+                kwargs[key] = val
+                setattr(self, key, val)
 
         self.__class__.db.update_fields(self.__class__.table, kwargs, pk_name, pk_value)
 
@@ -421,8 +461,13 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         for key, field in cls._fields.items():
             if not field.to_sql():
                 continue
-            if key not in kwargs and field.default is not None:
-                kwargs[key] = field.default
+            if getattr(field, "auto_now", False):
+                kwargs[key] = field.get_current_value()
+            elif key not in kwargs or kwargs[key] is None or kwargs[key] in ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "NOW()"):
+                if getattr(field, "auto_now_add", False):
+                    kwargs[key] = field.get_current_value()
+                elif field.default is not None:
+                    kwargs[key] = field.get_default_value()
 
         if not kwargs:
             raise ValueError("Create requires at least one field to insert")
@@ -456,11 +501,14 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         values_list = []
         for inst in instances:
             for col in columns:
-                if (
-                    getattr(inst, col, None) is None
-                    and cls._fields[col].default is not None
-                ):
-                    setattr(inst, col, cls._fields[col].default)
+                field = cls._fields[col]
+                if getattr(field, "auto_now", False):
+                    setattr(inst, col, field.get_current_value())
+                elif getattr(field, "auto_now_add", False):
+                    if getattr(inst, col, None) is None:
+                        setattr(inst, col, field.get_current_value())
+                elif getattr(inst, col, None) is None and field.default is not None:
+                    setattr(inst, col, field.get_default_value())
 
             val_tuple = tuple(getattr(inst, col, None) for col in columns)
             values_list.append(val_tuple)
@@ -477,12 +525,23 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             return
 
         pk_name = cls.get_pk_name()
-        set_clause = ", ".join([f"{f} = ${i+1}" for i, f in enumerate(fields)])
-        sql = f"UPDATE {cls.table} SET {set_clause} WHERE {pk_name} = ${len(fields)+1}"
+        auto_now_fields = [
+            k for k, f in cls._fields.items() if getattr(f, "auto_now", False)
+        ]
+        fields_to_update = list(fields)
+        for col in auto_now_fields:
+            if col not in fields_to_update and col != pk_name:
+                fields_to_update.append(col)
+
+        set_clause = ", ".join([f"{f} = ${i+1}" for i, f in enumerate(fields_to_update)])
+        sql = f"UPDATE {cls.table} SET {set_clause} WHERE {pk_name} = ${len(fields_to_update)+1}"
 
         values_list = []
         for inst in instances:
-            val_tuple = tuple(getattr(inst, f, None) for f in fields) + (
+            for col in auto_now_fields:
+                val = cls._fields[col].get_current_value()
+                setattr(inst, col, val)
+            val_tuple = tuple(getattr(inst, f, None) for f in fields_to_update) + (
                 getattr(inst, pk_name),
             )
             values_list.append(val_tuple)
@@ -512,13 +571,21 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
     async def save(self):
         self.__class__._check_setup()
-        await self.clean()
-        await self.before_save()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
 
         if pk_value is None:
+            for field_name, field in self.__class__._fields.items():
+                if getattr(field, "auto_now", False):
+                    setattr(self, field_name, field.get_current_value())
+                elif getattr(field, "auto_now_add", False):
+                    if getattr(self, field_name, None) is None:
+                        setattr(self, field_name, field.get_current_value())
+
+            await self.clean()
+            await self.before_save()
+
             data = self.to_dict()
             if data.get(pk_name) is None:
                 data.pop(pk_name, None)
@@ -529,6 +596,13 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
                     setattr(self, field_name, getattr(created, field_name, None))
             await self.after_save(created=True)
             return self
+
+        for field_name, field in self.__class__._fields.items():
+            if getattr(field, "auto_now", False):
+                setattr(self, field_name, field.get_current_value())
+
+        await self.clean()
+        await self.before_save()
 
         data = {}
         for field_name, field in self.__class__._fields.items():
@@ -574,6 +648,12 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
                 ).FExpression,
             ):
                 setattr(self, key, value)
+
+        for key, field in self.__class__._fields.items():
+            if getattr(field, "auto_now", False) and key not in kwargs:
+                val = field.get_current_value()
+                kwargs[key] = val
+                setattr(self, key, val)
 
         await self.__class__.db.update_fields(
             self.__class__.table, kwargs, pk_name, pk_value

@@ -25,9 +25,32 @@ class Field:
         self.validators = validators or []
         self.name = None
 
+    def get_default_value(self):
+        if hasattr(self, "get_current_value") and (
+            getattr(self, "auto_now", False) or getattr(self, "auto_now_add", False)
+        ):
+            return self.get_current_value()
+        if callable(self.default):
+            return self.default()
+        if self.default in (
+            "CURRENT_DATE",
+            "CURRENT_TIME",
+            "CURRENT_TIMESTAMP",
+            "NOW()",
+        ):
+            if hasattr(self, "get_current_value"):
+                return self.get_current_value()
+        return self.default
+
     def validate(self, value):
         if value is None:
-            if not self.nullable and not self.primary_key and self.default is None:
+            if (
+                not self.nullable
+                and not self.primary_key
+                and self.default is None
+                and not getattr(self, "auto_now", False)
+                and not getattr(self, "auto_now_add", False)
+            ):
                 field_desc = self.verbose_name or f"'{self.name}'"
                 raise ValidationError(
                     f"{field_desc} ustuni bo'sh (NULL) bo'lishi mumkin emas."
@@ -52,7 +75,7 @@ class Field:
         if not self.nullable and not self.primary_key:
             parts.append("NOT NULL")
 
-        if self.default is not None:
+        if self.default is not None and not callable(self.default):
             parts.append(f"DEFAULT {self.default}")
 
         return " ".join(parts)

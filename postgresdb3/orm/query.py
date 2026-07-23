@@ -483,6 +483,9 @@ class QuerySet:
         return self.model.create(**params), True
 
     def update(self, **kwargs):
+        for name, field in self.model._fields.items():
+            if getattr(field, "auto_now", False) and name not in kwargs:
+                kwargs[name] = field.get_current_value()
         if not kwargs:
             return 0
         where = self._build_where()
@@ -1082,6 +1085,9 @@ class AsyncQuerySet:
         return await self.model.create(**params), True
 
     async def update(self, **kwargs):
+        for name, field in self.model._fields.items():
+            if getattr(field, "auto_now", False) and name not in kwargs:
+                kwargs[name] = field.get_current_value()
         if not kwargs:
             return 0
         where = self._build_where()

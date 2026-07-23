@@ -114,6 +114,41 @@ class FieldsTestCase(unittest.TestCase):
         with self.assertRaises(ValidationError):
             f.validate(5)
 
+    def test_datetime_auto_now_and_auto_now_add(self):
+        import datetime
+
+        f_date_add = Date(auto_now_add=True)
+        f_date_add.name = "d"
+        self.assertTrue(f_date_add.auto_now_add)
+        self.assertFalse(f_date_add.auto_now)
+        self.assertIn("DEFAULT CURRENT_DATE", f_date_add.to_sql())
+        self.assertIsInstance(f_date_add.get_default_value(), datetime.date)
+
+        f_time_now = Time(auto_now=True)
+        f_time_now.name = "t"
+        self.assertTrue(f_time_now.auto_now)
+        self.assertFalse(f_time_now.auto_now_add)
+        self.assertIn("DEFAULT CURRENT_TIME", f_time_now.to_sql())
+        self.assertIsInstance(f_time_now.get_default_value(), datetime.time)
+
+        f_ts_add = Timestamp(auto_now_add=True)
+        f_ts_add.name = "ts"
+        self.assertTrue(f_ts_add.auto_now_add)
+        self.assertIn("DEFAULT CURRENT_TIMESTAMP", f_ts_add.to_sql())
+        self.assertIsInstance(f_ts_add.get_default_value(), datetime.datetime)
+
+        f_tsz_now = Timestamptz(auto_now=True)
+        f_tsz_now.name = "tsz"
+        self.assertTrue(f_tsz_now.auto_now)
+        self.assertIn("DEFAULT CURRENT_TIMESTAMP", f_tsz_now.to_sql())
+        val = f_tsz_now.get_default_value()
+        self.assertIsInstance(val, datetime.datetime)
+        self.assertIsNotNone(val.tzinfo)
+
+        # Positional boolean test (legacy compatibility)
+        f_legacy = Date(True)
+        self.assertTrue(f_legacy.auto_now_add)
+
 
 if __name__ == "__main__":
     unittest.main()
