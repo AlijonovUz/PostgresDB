@@ -28,6 +28,11 @@ class Array(Field):
 
     @property
     def sql_type(self):
+        if self.base_type is None:
+            raise ValueError(
+                f"Array maydoni '{self.name}' uchun 'base_type' ko'rsatilishi shart. "
+                "Masalan: Array(base_type='TEXT') yoki Array(base_type='INTEGER')"
+            )
         return f"{self.base_type}[]"
 
 

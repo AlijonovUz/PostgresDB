@@ -79,7 +79,7 @@ class FieldsTestCase(unittest.TestCase):
 
         f_bool = Boolean(default=False)
         f_bool.name = "is_active"
-        self.assertIn("is_active BOOLEAN NOT NULL DEFAULT False", f_bool.to_sql())
+        self.assertIn("is_active BOOLEAN NOT NULL DEFAULT FALSE", f_bool.to_sql())
 
         f_uuid = UUID()
         f_uuid.name = "uid"
@@ -144,7 +144,6 @@ class FieldsTestCase(unittest.TestCase):
         self.assertIsInstance(val, datetime.datetime)
         self.assertIsNotNone(val.tzinfo)
 
-        # Positional boolean test (legacy compatibility)
         f_legacy = Date(True)
         self.assertTrue(f_legacy.auto_now_add)
 

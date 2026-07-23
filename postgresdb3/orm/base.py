@@ -28,13 +28,6 @@ class BaseModel:
                 except AttributeError:
                     pass
 
-    def __repr__(self):
-        pk_name = self.get_pk_name()
-        pk_val = getattr(self, pk_name, None)
-        return f"<{self.__class__.__name__}: {pk_name}={pk_val}>"
-
-    def __str__(self):
-        return repr(self)
 
     def __iter__(self):
         for field_name, field in self._fields.items():

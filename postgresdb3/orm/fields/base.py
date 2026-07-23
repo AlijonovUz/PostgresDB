@@ -59,7 +59,7 @@ class Field:
             return None
 
         if isinstance(self.default, bool):
-            return str(self.default)
+            return "TRUE" if self.default else "FALSE"
         elif isinstance(self.default, (int, float)):
             return str(self.default)
         elif isinstance(self.default, str):
@@ -109,7 +109,8 @@ class Field:
         if self.unique:
             parts.append("UNIQUE")
 
-        if not self.nullable and not self.primary_key:
+        is_serial = self.sql_type in ("SERIAL", "BIGSERIAL", "SMALLSERIAL")
+        if not self.nullable and not self.primary_key and not is_serial:
             parts.append("NOT NULL")
 
         sql_default = self.get_sql_default()

@@ -185,7 +185,6 @@ class MigrationEngine:
         operations = []
         reverse_operations = []
 
-        # 1. Jadval nomlari o'zgarganini aniqlash (Table rename detection)
         if interactive:
             prev_tables = set(previous_state.keys())
             curr_tables = set(current_state.keys())
@@ -227,6 +226,9 @@ class MigrationEngine:
                 if composite_pk:
                     cols += f", PRIMARY KEY ({', '.join(composite_pk)})"
 
+                if unique_constraints:
+                    cols += ", " + ", ".join(unique_constraints)
+
                 operations.append(f"CREATE TABLE IF NOT EXISTS {table} ({cols});")
                 reverse_operations.append(f"DROP TABLE IF EXISTS {table} CASCADE;")
 
@@ -251,7 +253,6 @@ class MigrationEngine:
                     prev_fields = prev_data.get("fields", {})
                     prev_meta = prev_data.get("meta_options", {})
 
-                # 2. Ustun nomlari o'zgarganini aniqlash (Column rename detection)
                 if interactive:
                     curr_fields_list = list(fields.keys())
                     prev_fields_list = list(prev_fields.keys())
@@ -427,10 +428,12 @@ class MigrationEngine:
                                     f"ALTER TABLE {table} ADD CONSTRAINT {table}_{field_name}_key UNIQUE ({field_name});"
                                 )
 
-                prev_unique = prev_meta.get("unique_together", ())
-                prev_index = prev_meta.get("index_together", ())
+                prev_unique = [tuple(c) for c in prev_meta.get("unique_together", ())]
+                prev_index = [tuple(c) for c in prev_meta.get("index_together", ())]
+                unique_together_tuples = [tuple(c) for c in unique_together]
+                index_together_tuples = [tuple(c) for c in index_together]
 
-                for cols_tuple in unique_together:
+                for cols_tuple in unique_together_tuples:
                     if cols_tuple not in prev_unique:
                         constraint_name = f"uq_{table}_{'_'.join(cols_tuple)}"
                         operations.append(
@@ -441,7 +444,7 @@ class MigrationEngine:
                         )
 
                 for cols_tuple in prev_unique:
-                    if cols_tuple not in unique_together:
+                    if cols_tuple not in unique_together_tuples:
                         constraint_name = f"uq_{table}_{'_'.join(cols_tuple)}"
                         operations.append(
                             f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {constraint_name};"
@@ -450,7 +453,7 @@ class MigrationEngine:
                             f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} UNIQUE ({', '.join(cols_tuple)});"
                         )
 
-                for cols_tuple in index_together:
+                for cols_tuple in index_together_tuples:
                     if cols_tuple not in prev_index:
                         idx_name = f"idx_{table}_{'_'.join(cols_tuple)}"
                         operations.append(
@@ -459,7 +462,7 @@ class MigrationEngine:
                         reverse_operations.append(f"DROP INDEX IF EXISTS {idx_name};")
 
                 for cols_tuple in prev_index:
-                    if cols_tuple not in index_together:
+                    if cols_tuple not in index_together_tuples:
                         idx_name = f"idx_{table}_{'_'.join(cols_tuple)}"
                         operations.append(f"DROP INDEX IF EXISTS {idx_name};")
                         reverse_operations.append(
@@ -825,19 +828,35 @@ class MigrationEngine:
                         data = json.load(f)
 
                     for op in data.get("operations", []):
-                        await db._manager(op)
+                        await db._manager(op, commit=True)
 
                     await db.insert("postgresdb3_migrations", "name", [file])
                     print(f"Muvaffaqiyatli qo'llanildi: {file}")
 
     def undo_migration(self, db):
         import asyncio
+        import inspect
 
-        is_async = asyncio.iscoroutinefunction(db._manager)
+        is_async = inspect.iscoroutinefunction(db._manager)
         if is_async:
             raise ValueError(
                 "Asinxron obyekt uchun 'await engine.async_undo_migration(db)' ishlating."
             )
+
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS postgresdb3_migrations (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) UNIQUE,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        db._manager(create_table_sql, commit=True)
+        applied_records = db.select("postgresdb3_migrations", "name")
+        applied_migrations = (
+            {r["name"] if isinstance(r, dict) else r[0] for r in applied_records}
+            if applied_records
+            else set()
+        )
 
         files = sorted(
             [f for f in os.listdir(self.migrations_dir) if f.endswith(".json")]
@@ -846,23 +865,47 @@ class MigrationEngine:
             print("Orqaga qaytarish uchun migratsiyalar topilmadi.")
             return
 
-        last_file = files[-1]
-        print(f"Orqaga qaytarilmoqda: {last_file}...")
+        last_applied = None
+        for file in reversed(files):
+            if file in applied_migrations:
+                last_applied = file
+                break
+
+        if not last_applied:
+            print("Orqaga qaytarish uchun qo'llanilgan migratsiya topilmadi.")
+            return
+
+        print(f"Orqaga qaytarilmoqda: {last_applied}...")
 
         with open(
-            os.path.join(self.migrations_dir, last_file), "r", encoding="utf-8"
+            os.path.join(self.migrations_dir, last_applied), "r", encoding="utf-8"
         ) as f:
             data = json.load(f)
 
         with db.transaction():
             for op in reversed(data.get("reverse_operations", [])):
                 db._manager(op)
-            db.delete("postgresdb3_migrations", "name", last_file)
+            db.delete("postgresdb3_migrations", "name", last_applied)
 
-        os.remove(os.path.join(self.migrations_dir, last_file))
-        print(f"Muvaffaqiyatli bekor qilindi va o'chirildi: {last_file}")
+        os.remove(os.path.join(self.migrations_dir, last_applied))
+        print(f"Muvaffaqiyatli bekor qilindi va o'chirildi: {last_applied}")
 
     async def async_undo_migration(self, db):
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS postgresdb3_migrations (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) UNIQUE,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        await db._manager(create_table_sql, commit=True)
+        applied_records = await db.select("postgresdb3_migrations", "name")
+        applied_migrations = (
+            {r["name"] if isinstance(r, dict) else r[0] for r in applied_records}
+            if applied_records
+            else set()
+        )
+
         files = sorted(
             [f for f in os.listdir(self.migrations_dir) if f.endswith(".json")]
         )
@@ -870,18 +913,27 @@ class MigrationEngine:
             print("Orqaga qaytarish uchun migratsiyalar topilmadi.")
             return
 
-        last_file = files[-1]
-        print(f"Orqaga qaytarilmoqda: {last_file}...")
+        last_applied = None
+        for file in reversed(files):
+            if file in applied_migrations:
+                last_applied = file
+                break
+
+        if not last_applied:
+            print("Orqaga qaytarish uchun qo'llanilgan migratsiya topilmadi.")
+            return
+
+        print(f"Orqaga qaytarilmoqda: {last_applied}...")
 
         with open(
-            os.path.join(self.migrations_dir, last_file), "r", encoding="utf-8"
+            os.path.join(self.migrations_dir, last_applied), "r", encoding="utf-8"
         ) as f:
             data = json.load(f)
 
         async with db.transaction():
             for op in reversed(data.get("reverse_operations", [])):
-                await db._manager(op)
-            await db.delete("postgresdb3_migrations", "name", last_file)
+                await db._manager(op, commit=True)
+            await db.delete("postgresdb3_migrations", "name", last_applied)
 
-        os.remove(os.path.join(self.migrations_dir, last_file))
-        print(f"Muvaffaqiyatli bekor qilindi va o'chirildi: {last_file}")
+        os.remove(os.path.join(self.migrations_dir, last_applied))
+        print(f"Muvaffaqiyatli bekor qilindi va o'chirildi: {last_applied}")

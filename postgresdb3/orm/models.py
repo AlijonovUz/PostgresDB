@@ -655,6 +655,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             if data.get(pk_name) is None:
                 data.pop(pk_name, None)
 
+            # create() o'z ichida pre_save/post_save yuboradi
             created = await self.__class__.create(**data)
             for field_name, field in self.__class__._fields.items():
                 if field.to_sql():
@@ -662,12 +663,15 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             await self.after_save(created=True)
             return self
 
+        from postgresdb3.orm.signals import pre_save, post_save
+
         for field_name, field in self.__class__._fields.items():
             if getattr(field, "auto_now", False):
                 setattr(self, field_name, field.get_current_value())
 
         await self.clean()
         await self.before_save()
+        await pre_save.send_async(sender=self.__class__, instance=self, created=False)
 
         data = {}
         for field_name, field in self.__class__._fields.items():
@@ -681,6 +685,7 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         )
 
         await self.after_save(created=False)
+        await post_save.send_async(sender=self.__class__, instance=self, created=False)
         return self
 
     async def update(self, **kwargs):
@@ -727,8 +732,11 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
         return self
 
     async def delete(self):
+        from postgresdb3.orm.signals import pre_delete, post_delete
+
         self.__class__._check_setup()
         await self.before_delete()
+        await pre_delete.send_async(sender=self.__class__, instance=self)
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -738,4 +746,5 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
         await self.__class__.db.delete(self.__class__.table, pk_name, pk_value)
         await self.after_delete()
+        await post_delete.send_async(sender=self.__class__, instance=self)
         return True
