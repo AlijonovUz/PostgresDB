@@ -16,6 +16,9 @@ class PaginationResult(Generic[T]):
     data: list[T]
 
 
+_query_cache = {}
+
+
 class QuerySet:
     def __init__(self, model):
         self.model = model
@@ -28,11 +31,24 @@ class QuerySet:
         self._join = None
         self._group_by = None
         self._select_for_update = False
+        self._cache_ttl = None
 
     def _clone(self):
         qs = self.__class__(self.model)
-        qs._where = list(self._where) if self._where else None
-        qs._exclude = list(self._exclude) if self._exclude else None
+        if isinstance(self._where, dict):
+            qs._where = dict(self._where)
+        elif isinstance(self._where, list):
+            qs._where = list(self._where)
+        else:
+            qs._where = self._where
+
+        if isinstance(self._exclude, dict):
+            qs._exclude = dict(self._exclude)
+        elif isinstance(self._exclude, list):
+            qs._exclude = list(self._exclude)
+        else:
+            qs._exclude = self._exclude
+
         qs._order_by = self._order_by
         qs._limit = self._limit
         qs._offset = self._offset
@@ -40,6 +56,15 @@ class QuerySet:
         qs._join = self._join
         qs._group_by = self._group_by
         qs._select_for_update = self._select_for_update
+        qs._cache_ttl = self._cache_ttl
+        return qs
+
+    def cache(self, ttl: float = 60.0):
+        """
+        So'rov natijasini ko'rsatilgan soniya (ttl) davomida keshda saqlaydi.
+        """
+        qs = self._clone()
+        qs._cache_ttl = ttl
         return qs
 
     def update(self, **kwargs):
@@ -96,14 +121,14 @@ class QuerySet:
             field = self.model._fields.get(field_name)
             if not field or not hasattr(field, "to"):
                 raise ValueError(
-                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi."
+                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
                 )
 
-            from .fields.foreign import ManyToManyField
+            from .fields.foreign import ManyToMany
 
-            if isinstance(field, ManyToManyField):
+            if isinstance(field, ManyToMany):
                 raise TypeError(
-                    f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating."
+                    f"'{field_name}' bu ManyToMany! Uning uchun select_related() emas, balki prefetch_related() ishlating."
                 )
 
             related_table = field.to.table
@@ -136,6 +161,7 @@ class QuerySet:
         if not q:
             return q
         from postgresdb3.orm.expressions import Q
+
         if isinstance(q, Q):
             if q.conditions:
                 q.conditions = self._process_auto_joins(q.conditions)
@@ -146,7 +172,10 @@ class QuerySet:
 
     def _process_auto_joins(self, kwargs):
         new_kwargs = {}
-        from postgresdb3.orm.relations import ForeignKeyRelation, AsyncForeignKeyRelation
+        from postgresdb3.orm.relations import (
+            ForeignKeyRelation,
+            AsyncForeignKeyRelation,
+        )
         from postgresdb3.orm.base import BaseModel
 
         def extract_pk(val):
@@ -164,7 +193,9 @@ class QuerySet:
             field_name = parts[0]
 
             relation = getattr(self.model, field_name, None)
-            is_fk_relation = relation and isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation))
+            is_fk_relation = relation and isinstance(
+                relation, (ForeignKeyRelation, AsyncForeignKeyRelation)
+            )
 
             is_fk_comparison = False
             if is_fk_relation:
@@ -172,9 +203,24 @@ class QuerySet:
                     is_fk_comparison = True
                 elif len(parts) == 2:
                     lookup_ops = {
-                        "eq", "ne", "not", "gt", "gte", "lt", "lte", "like", "ilike",
-                        "contains", "icontains", "startswith", "istartswith",
-                        "endswith", "iendswith", "in", "not_in", "isnull"
+                        "eq",
+                        "ne",
+                        "not",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "like",
+                        "ilike",
+                        "contains",
+                        "icontains",
+                        "startswith",
+                        "istartswith",
+                        "endswith",
+                        "iendswith",
+                        "in",
+                        "not_in",
+                        "isnull",
                     }
                     if parts[1] in lookup_ops:
                         is_fk_comparison = True
@@ -291,7 +337,69 @@ class QuerySet:
         qs._flat = flat
         return qs
 
+    def only(self, *fields):
+        """
+        Faqat ko'rsatilgan ustunlarni yuklaydi. Model obyektlari qaytariladi.
+        """
+        qs = self._clone()
+        if not fields:
+            return qs
+
+        pk = self.model.get_pk_name()
+        pk_list = [pk] if isinstance(pk, str) else list(pk)
+
+        selected = list(fields)
+        for p in pk_list:
+            if p not in selected and p in self.model._fields:
+                selected.insert(0, p)
+
+        for f in fields:
+            if f not in self.model._fields:
+                raise ValueError(
+                    f"'{f}' ustuni {self.model.__name__} modelida mavjud emas"
+                )
+
+        qs._columns = ", ".join(selected)
+        return qs
+
+    def defer(self, *fields):
+        """
+        Ko'rsatilgan ustunlardan tashqari barcha ustunlarni yuklaydi.
+        """
+        qs = self._clone()
+        if not fields:
+            return qs
+
+        pk = self.model.get_pk_name()
+        pk_set = set([pk] if isinstance(pk, str) else list(pk))
+        deferred = set(fields) - pk_set
+
+        selected = [
+            f
+            for f in self.model._fields
+            if f not in deferred and self.model._fields[f].to_sql()
+        ]
+        qs._columns = ", ".join(selected)
+        return qs
+
     def all(self):
+        import time
+
+        cache_key = None
+        if getattr(self, "_cache_ttl", None) is not None:
+            cache_key = (
+                self.model.__name__,
+                self._columns,
+                str(self._where),
+                str(self._order_by),
+                self._limit,
+                self._offset,
+            )
+            if cache_key in _query_cache:
+                cached_time, cached_res = _query_cache[cache_key]
+                if time.time() - cached_time < self._cache_ttl:
+                    return cached_res
+
         where = self._build_where()
 
         columns = self._columns or "*"
@@ -322,19 +430,28 @@ class QuerySet:
         )
 
         if getattr(self, "_return_type", None) == "dict":
-            return records
+            res = records
         elif getattr(self, "_return_type", None) == "list":
             if getattr(self, "_flat", False):
-                return [
+                res = [
                     list(r.values())[0] if isinstance(r, dict) else r[0]
                     for r in records
                 ]
-            return [
-                tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records
-            ]
+            else:
+                res = [
+                    tuple(r.values()) if isinstance(r, dict) else tuple(r)
+                    for r in records
+                ]
+        else:
+            instances = self.model._from_records(records)
+            res = self._process_prefetch(instances)
 
-        instances = self.model._from_records(records)
+        if cache_key is not None:
+            _query_cache[cache_key] = (time.time(), res)
 
+        return res
+
+    def _process_prefetch(self, instances):
         if hasattr(self, "_prefetch") and self._prefetch and instances:
             for field_name in self._prefetch:
                 relation = getattr(self.model, field_name, None)
@@ -640,8 +757,20 @@ class AsyncQuerySet:
 
     def _clone(self):
         qs = self.__class__(self.model)
-        qs._where = list(self._where) if self._where else None
-        qs._exclude = list(self._exclude) if self._exclude else None
+        if isinstance(self._where, dict):
+            qs._where = dict(self._where)
+        elif isinstance(self._where, list):
+            qs._where = list(self._where)
+        else:
+            qs._where = self._where
+
+        if isinstance(self._exclude, dict):
+            qs._exclude = dict(self._exclude)
+        elif isinstance(self._exclude, list):
+            qs._exclude = list(self._exclude)
+        else:
+            qs._exclude = self._exclude
+
         qs._order_by = self._order_by
         qs._limit = self._limit
         qs._offset = self._offset
@@ -689,6 +818,7 @@ class AsyncQuerySet:
         if not q:
             return q
         from postgresdb3.orm.expressions import Q
+
         if isinstance(q, Q):
             if q.conditions:
                 q.conditions = self._process_auto_joins(q.conditions)
@@ -699,7 +829,10 @@ class AsyncQuerySet:
 
     def _process_auto_joins(self, kwargs):
         new_kwargs = {}
-        from postgresdb3.orm.relations import ForeignKeyRelation, AsyncForeignKeyRelation
+        from postgresdb3.orm.relations import (
+            ForeignKeyRelation,
+            AsyncForeignKeyRelation,
+        )
         from postgresdb3.orm.base import BaseModel
 
         def extract_pk(val):
@@ -717,7 +850,9 @@ class AsyncQuerySet:
             field_name = parts[0]
 
             relation = getattr(self.model, field_name, None)
-            is_fk_relation = relation and isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation))
+            is_fk_relation = relation and isinstance(
+                relation, (ForeignKeyRelation, AsyncForeignKeyRelation)
+            )
 
             is_fk_comparison = False
             if is_fk_relation:
@@ -725,9 +860,24 @@ class AsyncQuerySet:
                     is_fk_comparison = True
                 elif len(parts) == 2:
                     lookup_ops = {
-                        "eq", "ne", "not", "gt", "gte", "lt", "lte", "like", "ilike",
-                        "contains", "icontains", "startswith", "istartswith",
-                        "endswith", "iendswith", "in", "not_in", "isnull"
+                        "eq",
+                        "ne",
+                        "not",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "like",
+                        "ilike",
+                        "contains",
+                        "icontains",
+                        "startswith",
+                        "istartswith",
+                        "endswith",
+                        "iendswith",
+                        "in",
+                        "not_in",
+                        "isnull",
                     }
                     if parts[1] in lookup_ops:
                         is_fk_comparison = True
@@ -859,14 +1009,14 @@ class AsyncQuerySet:
             field = self.model._fields.get(field_name)
             if not field or not hasattr(field, "to"):
                 raise ValueError(
-                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOneField bilan ishlaydi."
+                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
                 )
 
-            from .fields.foreign import ManyToManyField
+            from .fields.foreign import ManyToMany
 
-            if isinstance(field, ManyToManyField):
+            if isinstance(field, ManyToMany):
                 raise TypeError(
-                    f"'{field_name}' bu ManyToManyField! Uning uchun select_related() emas, balki prefetch_related() ishlating."
+                    f"'{field_name}' bu ManyToMany! Uning uchun select_related() emas, balki prefetch_related() ishlating."
                 )
 
             related_table = field.to.table
@@ -893,6 +1043,51 @@ class AsyncQuerySet:
             qs._columns = ", ".join(fields)
         qs._return_type = "list"
         qs._flat = flat
+        return qs
+
+    def only(self, *fields):
+        """
+        Faqat ko'rsatilgan ustunlarni yuklaydi (Asinxron). Model obyektlari qaytariladi.
+        """
+        qs = self._clone()
+        if not fields:
+            return qs
+
+        pk = self.model.get_pk_name()
+        pk_list = [pk] if isinstance(pk, str) else list(pk)
+
+        selected = list(fields)
+        for p in pk_list:
+            if p not in selected and p in self.model._fields:
+                selected.insert(0, p)
+
+        for f in fields:
+            if f not in self.model._fields:
+                raise ValueError(
+                    f"'{f}' ustuni {self.model.__name__} modelida mavjud emas"
+                )
+
+        qs._columns = ", ".join(selected)
+        return qs
+
+    def defer(self, *fields):
+        """
+        Ko'rsatilgan ustunlardan tashqari barcha ustunlarni yuklaydi (Asinxron).
+        """
+        qs = self._clone()
+        if not fields:
+            return qs
+
+        pk = self.model.get_pk_name()
+        pk_set = set([pk] if isinstance(pk, str) else list(pk))
+        deferred = set(fields) - pk_set
+
+        selected = [
+            f
+            for f in self.model._fields
+            if f not in deferred and self.model._fields[f].to_sql()
+        ]
+        qs._columns = ", ".join(selected)
         return qs
 
     def prefetch_related(self, *fields):
@@ -1307,4 +1502,3 @@ class AsyncFindQuerySet(AsyncQuerySet):
 
     async def delete(self):
         return await super().delete()
-

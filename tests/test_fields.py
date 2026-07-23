@@ -1,5 +1,5 @@
 import unittest
-from postgresdb3 import (
+from postgresdb3.orm.fields import (
     String,
     Text,
     Integer,
@@ -19,9 +19,8 @@ from postgresdb3 import (
     Array,
     Serial,
     BigSerial,
-    MinValueValidator,
-    ValidationError,
 )
+from postgresdb3.orm.validators import MinValueValidator, ValidationError
 
 
 class FieldsTestCase(unittest.TestCase):

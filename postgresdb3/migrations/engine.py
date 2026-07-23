@@ -24,14 +24,25 @@ class MigrationEngine:
                     field_sql.split(" ", 1)[1] if " " in field_sql else field_sql
                 )
 
-            if not any(
-                getattr(f, "primary_key", False) for f in model._fields.values()
-            ):
-                ordered_fields = {model.get_pk_name(): "SERIAL PRIMARY KEY"}
-                ordered_fields.update(fields)
-                fields = ordered_fields
-
+            pk_fields = [
+                fname
+                for fname, f in model._fields.items()
+                if getattr(f, "primary_key", False)
+            ]
             meta_options = getattr(model, "_meta_options", {}).copy()
+
+            if len(pk_fields) > 1:
+                clean_fields = {}
+                for fname, fsql in fields.items():
+                    clean_fields[fname] = fsql.replace(" PRIMARY KEY", "")
+                fields = clean_fields
+                meta_options["composite_pk"] = tuple(pk_fields)
+            elif not pk_fields:
+                pk_name = model.get_pk_name()
+                if isinstance(pk_name, str):
+                    ordered_fields = {pk_name: "SERIAL PRIMARY KEY"}
+                    ordered_fields.update(fields)
+                    fields = ordered_fields
             if "indexes" in meta_options:
                 meta_options["indexes"] = [
                     idx.to_dict() if isinstance(idx, Index) else idx
@@ -39,6 +50,121 @@ class MigrationEngine:
                 ]
             state[table_name] = {"fields": fields, "meta_options": meta_options}
         return state
+
+    def validate_and_format_default(self, val_str, sql_type):
+        """
+        Kiritilgan matnni sql_type turiga mosligini tekshiradi va SQL uchun tayyor default qiymat stringini qaytaradi.
+        Noto'g'ri tur kiritilgan bo'lsa ValueError beradi.
+        """
+        val_str = val_str.strip()
+        clean_type = (
+            sql_type.upper()
+            .split("(")[0]
+            .replace("NOT NULL", "")
+            .replace("PRIMARY KEY", "")
+            .replace("UNIQUE", "")
+            .strip()
+        )
+
+        # 1. INTEGER turlari
+        if clean_type in ("INTEGER", "INT", "BIGINT", "SMALLINT"):
+            try:
+                val = int(val_str)
+                return str(val)
+            except ValueError:
+                raise ValueError(
+                    f"'{val_str}' - {clean_type} uchun yaroqli int (butun son) emas! Masalan: 0, 10, -5"
+                )
+
+        # 2. FLOAT / DOUBLE / NUMERIC turlari
+        elif clean_type in ("REAL", "FLOAT", "DOUBLE PRECISION", "NUMERIC", "DECIMAL"):
+            try:
+                val = float(val_str)
+                return str(val)
+            except ValueError:
+                raise ValueError(
+                    f"'{val_str}' - {clean_type} uchun yaroqli float (haqiqiy son) emas! Masalan: 3.14, 0.0"
+                )
+
+        # 3. BOOLEAN
+        elif clean_type == "BOOLEAN":
+            val_lower = val_str.lower()
+            if val_lower in ("true", "1", "t", "yes", "y"):
+                return "TRUE"
+            elif val_lower in ("false", "0", "f", "no", "n"):
+                return "FALSE"
+            else:
+                raise ValueError(
+                    f"'{val_str}' - BOOLEAN turiga mos kelmaydi! Faqat 'true', 'false', '1', '0', 'yes', 'no' kiritishingiz mumkin."
+                )
+
+        # 4. TIME
+        elif clean_type == "TIME":
+            if val_str.upper() in ("CURRENT_TIME", "NOW()", "LOCALTIME"):
+                return val_str.upper()
+            clean_val = val_str.strip("'\"")
+            try:
+                datetime.time.fromisoformat(clean_val)
+                return f"'{clean_val}'"
+            except ValueError:
+                raise ValueError(
+                    f"'{val_str}' - TIME formati noto'g'ri! Masalan: '14:30:00', '09:00:00' yoki CURRENT_TIME"
+                )
+
+        # 5. DATE
+        elif clean_type == "DATE":
+            if val_str.upper() in ("CURRENT_DATE", "NOW()", "LOCALDATE"):
+                return val_str.upper()
+            clean_val = val_str.strip("'\"")
+            try:
+                datetime.date.fromisoformat(clean_val)
+                return f"'{clean_val}'"
+            except ValueError:
+                raise ValueError(
+                    f"'{val_str}' - DATE formati noto'g'ri! YYYY-MM-DD ko'rinishida kiriting (Masalan: '2025-01-01') yoki CURRENT_DATE"
+                )
+
+        # 6. TIMESTAMP / TIMESTAMPTZ
+        elif clean_type in ("TIMESTAMP", "TIMESTAMPTZ", "DATETIME"):
+            if val_str.upper() in ("CURRENT_TIMESTAMP", "NOW()"):
+                return val_str.upper()
+            clean_val = val_str.strip("'\"")
+            try:
+                datetime.datetime.fromisoformat(clean_val.replace(" ", "T"))
+                return f"'{clean_val}'"
+            except ValueError:
+                raise ValueError(
+                    f"'{val_str}' - TIMESTAMP formati noto'g'ri! 'YYYY-MM-DD HH:MM:SS' ko'rinishida kiriting yoki CURRENT_TIMESTAMP"
+                )
+
+        # 7. UUID
+        elif clean_type == "UUID":
+            clean_val = val_str.strip("'\"")
+            try:
+                import uuid
+
+                uuid.UUID(clean_val)
+                return f"'{clean_val}'"
+            except ValueError:
+                raise ValueError(
+                    f"'{val_str}' - yaroqli UUID emas! (Masalan: '123e4567-e89b-12d3-a456-426614174000')"
+                )
+
+        # 8. JSON / JSONB
+        elif clean_type in ("JSON", "JSONB"):
+            clean_val = val_str.strip("'\"")
+            try:
+                json.loads(clean_val)
+                return f"'{clean_val}'"
+            except Exception:
+                raise ValueError(
+                    f"'{val_str}' - yaroqli JSON formati emas! (Masalan: '{{\"key\": \"value\"}}' yoki '[]')"
+                )
+
+        # 9. TEXT / VARCHAR / CHAR va boshqalar
+        else:
+            clean_val = val_str.strip("'\"")
+            return f"'{clean_val}'"
 
     def _get_previous_state(self):
         files = sorted(
@@ -52,12 +178,34 @@ class MigrationEngine:
             data = json.load(f)
             return data.get("state", {})
 
-    def makemigrations(self, message="auto", interactive=True):
+    def makemigrations(self, message="auto", interactive=True, dry_run=False):
         current_state = self._get_current_state()
         previous_state = self._get_previous_state()
 
         operations = []
         reverse_operations = []
+
+        # 1. Jadval nomlari o'zgarganini aniqlash (Table rename detection)
+        if interactive:
+            prev_tables = set(previous_state.keys())
+            curr_tables = set(current_state.keys())
+            deleted_tables = list(prev_tables - curr_tables)
+            added_tables = list(curr_tables - prev_tables)
+
+            for old_t in list(deleted_tables):
+                for new_t in list(added_tables):
+                    ans = input(
+                        f"Jadval nomi '{old_t}' dan '{new_t}' ga o'zgartirildimi? [y/N]: "
+                    )
+                    if ans.lower() == "y":
+                        operations.append(f"ALTER TABLE {old_t} RENAME TO {new_t};")
+                        reverse_operations.append(
+                            f"ALTER TABLE {new_t} RENAME TO {old_t};"
+                        )
+                        previous_state[new_t] = previous_state.pop(old_t)
+                        deleted_tables.remove(old_t)
+                        added_tables.remove(new_t)
+                        break
 
         for table, current_data in current_state.items():
             fields = current_data["fields"]
@@ -75,8 +223,9 @@ class MigrationEngine:
                         f"CONSTRAINT {constraint_name} UNIQUE ({', '.join(cols_tuple)})"
                     )
 
-                if unique_constraints:
-                    cols += ", " + ", ".join(unique_constraints)
+                composite_pk = meta_options.get("composite_pk")
+                if composite_pk:
+                    cols += f", PRIMARY KEY ({', '.join(composite_pk)})"
 
                 operations.append(f"CREATE TABLE IF NOT EXISTS {table} ({cols});")
                 reverse_operations.append(f"DROP TABLE IF EXISTS {table} CASCADE;")
@@ -102,8 +251,92 @@ class MigrationEngine:
                     prev_fields = prev_data.get("fields", {})
                     prev_meta = prev_data.get("meta_options", {})
 
+                # 2. Ustun nomlari o'zgarganini aniqlash (Column rename detection)
+                if interactive:
+                    curr_fields_list = list(fields.keys())
+                    prev_fields_list = list(prev_fields.keys())
+                    deleted_fields = [
+                        f for f in prev_fields_list if f not in curr_fields_list
+                    ]
+                    added_fields = [
+                        f for f in curr_fields_list if f not in prev_fields_list
+                    ]
+
+                    for old_f in list(deleted_fields):
+                        for new_f in list(added_fields):
+                            ans = input(
+                                f"'{table}' jadvalidagi '{old_f}' ustuni '{new_f}' ga o'zgartirildimi? [y/N]: "
+                            )
+                            if ans.lower() == "y":
+                                operations.append(
+                                    f"ALTER TABLE {table} RENAME COLUMN {old_f} TO {new_f};"
+                                )
+                                reverse_operations.append(
+                                    f"ALTER TABLE {table} RENAME COLUMN {new_f} TO {old_f};"
+                                )
+                                prev_fields[new_f] = prev_fields.pop(old_f)
+                                deleted_fields.remove(old_f)
+                                added_fields.remove(new_f)
+                                break
+
                 for field_name, field_sql in fields.items():
                     if field_name not in prev_fields:
+                        is_not_null = "NOT NULL" in field_sql
+                        has_default = "DEFAULT " in field_sql
+                        is_pk = "PRIMARY KEY" in field_sql
+                        is_serial = "SERIAL" in field_sql or "BIGSERIAL" in field_sql
+
+                        if (
+                            is_not_null
+                            and not has_default
+                            and not is_pk
+                            and not is_serial
+                        ):
+                            if interactive:
+                                f_type = (
+                                    field_sql.replace("NOT NULL", "")
+                                    .replace("PRIMARY KEY", "")
+                                    .replace("UNIQUE", "")
+                                    .strip()
+                                )
+                                print(
+                                    f"\n[!] DIQQAT: '{table}' jadvaliga NOT NULL bo'lgan '{field_name}' ({f_type}) ustuni default qiymatsiz qo'shilmoqda."
+                                )
+                                print(
+                                    f"    Mavjud ma'lumotlar omboridagi yozuvlar uchun default qiymat berishingiz kerak."
+                                )
+                                print("    1) Bir martalik default qiymat kiritish")
+                                print(
+                                    "    2) Bekor qilish (models.py faylida default ko'rsatish uchun)"
+                                )
+
+                                chosen = False
+                                while not chosen:
+                                    choice = input(
+                                        "Tanlang [1/2] (default: 1): "
+                                    ).strip()
+                                    if choice in ("", "1"):
+                                        while True:
+                                            val_input = input(
+                                                f"'{field_name}' ({f_type}) uchun default qiymatni kiriting: "
+                                            )
+                                            try:
+                                                formatted_def = (
+                                                    self.validate_and_format_default(
+                                                        val_input, f_type
+                                                    )
+                                                )
+                                                field_sql += f" DEFAULT {formatted_def}"
+                                                chosen = True
+                                                break
+                                            except ValueError as e:
+                                                print(f"❌ {e}")
+                                    elif choice == "2":
+                                        print("Migratsiya bekor qilindi.")
+                                        return
+                                    else:
+                                        print("Noto'g'ri tanlov. 1 yoki 2 ni kiriting.")
+
                         operations.append(
                             f"ALTER TABLE {table} ADD COLUMN {field_name} {field_sql};"
                         )
@@ -323,6 +556,12 @@ class MigrationEngine:
             print("O'zgarishlar topilmadi.")
             return
 
+        if dry_run:
+            print("\n[DRY RUN] Hosil bo'ladigan SQL operatsiyalar:")
+            for op in operations:
+                print(f"  - {op}")
+            return
+
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{message}.json"
         filepath = os.path.join(self.migrations_dir, filename)
@@ -341,8 +580,172 @@ class MigrationEngine:
         for op in operations:
             print(f"  - {op}")
 
-    def migrate(self, db):
+    def create_data_migration(
+        self,
+        message: str = "data_migration",
+        operations: list = None,
+        reverse_operations: list = None,
+    ):
+        """
+        Ma'lumotlar migratsiyasini (Data Migration) yaratish uchun maxsus metod.
+        Custom SQL so'rovlarini migratsiya zanjiriga kiritish uchun ishlatiladi.
+        """
+        if not operations:
+            print("Ma'lumotlar migratsiyasi uchun kamida bitta SQL operatsiyasi kerak.")
+            return
 
+        current_state = self._get_previous_state()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_{message}.json"
+        filepath = os.path.join(self.migrations_dir, filename)
+
+        migration_data = {
+            "message": message,
+            "operations": operations,
+            "reverse_operations": reverse_operations or [],
+            "state": current_state,
+        }
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(migration_data, f, indent=4)
+
+        print(f"Ma'lumotlar migratsiyasi yaratildi: {filename}")
+        for op in operations:
+            print(f"  - {op}")
+
+    def dumpdata(
+        self, db, filename: str = "fixture.json", model_names: list[str] = None
+    ):
+        """
+        Ma'lumotlar bazasidagi modellardan ma'lumotlarni JSON faylga eksport qilish (Fixtures).
+        """
+        from postgresdb3.orm.meta import model_registry
+
+        fixtures = []
+
+        for model in model_registry:
+            if (
+                model_names
+                and model.__name__ not in model_names
+                and model.table not in model_names
+            ):
+                continue
+
+            records = model.query().values().all()
+            for rec in records:
+                fixtures.append(
+                    {
+                        "model": model.__name__,
+                        "table": model.table,
+                        "fields": rec,
+                    }
+                )
+
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(fixtures, f, indent=4, default=str)
+
+        print(f"Fixtures '{filename}' fayliga saqlandi. Jami yozuvlar: {len(fixtures)}")
+
+    def loaddata(self, db, filename: str = "fixture.json"):
+        """
+        JSON fixture faylidan ma'lumotlarni ma'lumotlar bazasiga yuklash (Seed data).
+        """
+        from postgresdb3.orm.meta import model_registry
+
+        if not os.path.exists(filename):
+            print(f"Xato: '{filename}' fixture fayli topilmadi.")
+            return
+
+        with open(filename, "r", encoding="utf-8") as f:
+            fixtures = json.load(f)
+
+        model_map = {m.__name__: m for m in model_registry}
+        model_map.update({m.table: m for m in model_registry})
+
+        loaded_count = 0
+        with db.transaction():
+            for item in fixtures:
+                m_name = item.get("model") or item.get("table")
+                model_cls = model_map.get(m_name)
+                if not model_cls:
+                    print(
+                        f"Ogohlantirish: '{m_name}' modeli topilmadi, o'tkazib yuborilmoqda."
+                    )
+                    continue
+
+                fields_data = item.get("fields", {})
+                model_cls.get_or_create(**fields_data)
+                loaded_count += 1
+
+        print(f"Fixtures bazaga muvaffaqiyatli yuklandi: {loaded_count} ta yozuv.")
+
+    def showmigrations(self, db):
+        import asyncio
+
+        is_async = asyncio.iscoroutinefunction(db._manager)
+        if is_async:
+            raise ValueError(
+                "Asinxron obyekt uchun 'await engine.async_showmigrations(db)' ishlating."
+            )
+
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS postgresdb3_migrations (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) UNIQUE,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        db._manager(create_table_sql, commit=True)
+        applied_records = db.select("postgresdb3_migrations", "name")
+        applied_migrations = (
+            {r["name"] if isinstance(r, dict) else r[0] for r in applied_records}
+            if applied_records
+            else set()
+        )
+
+        files = sorted(
+            [f for f in os.listdir(self.migrations_dir) if f.endswith(".json")]
+        )
+        print("\nMigratsiyalar ro'yxati:")
+        if not files:
+            print("  (Migratsiya fayllari topilmadi)")
+            return
+
+        for file in files:
+            status = "[X]" if file in applied_migrations else "[ ]"
+            print(f"  {status} {file}")
+        print()
+
+    async def async_showmigrations(self, db):
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS postgresdb3_migrations (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) UNIQUE,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        await db._manager(create_table_sql, commit=True)
+        applied_records = await db.select("postgresdb3_migrations", "name")
+        applied_migrations = (
+            {r["name"] if isinstance(r, dict) else r[0] for r in applied_records}
+            if applied_records
+            else set()
+        )
+
+        files = sorted(
+            [f for f in os.listdir(self.migrations_dir) if f.endswith(".json")]
+        )
+        print("\nMigratsiyalar ro'yxati:")
+        if not files:
+            print("  (Migratsiya fayllari topilmadi)")
+            return
+
+        for file in files:
+            status = "[X]" if file in applied_migrations else "[ ]"
+            print(f"  {status} {file}")
+        print()
+
+    def migrate(self, db):
         import asyncio
 
         create_table_sql = """
@@ -353,9 +756,9 @@ class MigrationEngine:
         );
         """
 
-        import asyncio
+        import inspect
 
-        is_async = asyncio.iscoroutinefunction(db._manager)
+        is_async = inspect.iscoroutinefunction(db._manager)
 
         if is_async:
             raise ValueError(
@@ -375,19 +778,20 @@ class MigrationEngine:
             [f for f in os.listdir(self.migrations_dir) if f.endswith(".json")]
         )
 
-        for file in files:
-            if file not in applied_migrations:
-                print(f"Qo'llanilmoqda: {file}...")
-                with open(
-                    os.path.join(self.migrations_dir, file), "r", encoding="utf-8"
-                ) as f:
-                    data = json.load(f)
+        with db.transaction():
+            for file in files:
+                if file not in applied_migrations:
+                    print(f"Qo'llanilmoqda: {file}...")
+                    with open(
+                        os.path.join(self.migrations_dir, file), "r", encoding="utf-8"
+                    ) as f:
+                        data = json.load(f)
 
-                for op in data.get("operations", []):
-                    db._manager(op, commit=True)
+                    for op in data.get("operations", []):
+                        db._manager(op)
 
-                db.insert("postgresdb3_migrations", "name", [file])
-                print(f"Muvaffaqiyatli qo'llanildi: {file}")
+                    db.insert("postgresdb3_migrations", "name", [file])
+                    print(f"Muvaffaqiyatli qo'llanildi: {file}")
 
     async def async_migrate(self, db):
         create_table_sql = """
@@ -411,19 +815,20 @@ class MigrationEngine:
             [f for f in os.listdir(self.migrations_dir) if f.endswith(".json")]
         )
 
-        for file in files:
-            if file not in applied_migrations:
-                print(f"Qo'llanilmoqda: {file}...")
-                with open(
-                    os.path.join(self.migrations_dir, file), "r", encoding="utf-8"
-                ) as f:
-                    data = json.load(f)
+        async with db.transaction():
+            for file in files:
+                if file not in applied_migrations:
+                    print(f"Qo'llanilmoqda: {file}...")
+                    with open(
+                        os.path.join(self.migrations_dir, file), "r", encoding="utf-8"
+                    ) as f:
+                        data = json.load(f)
 
-                for op in data.get("operations", []):
-                    await db._manager(op, commit=True)
+                    for op in data.get("operations", []):
+                        await db._manager(op)
 
-                await db.insert("postgresdb3_migrations", "name", [file])
-                print(f"Muvaffaqiyatli qo'llanildi: {file}")
+                    await db.insert("postgresdb3_migrations", "name", [file])
+                    print(f"Muvaffaqiyatli qo'llanildi: {file}")
 
     def undo_migration(self, db):
         import asyncio
@@ -449,10 +854,11 @@ class MigrationEngine:
         ) as f:
             data = json.load(f)
 
-        for op in reversed(data.get("reverse_operations", [])):
-            db._manager(op, commit=True)
+        with db.transaction():
+            for op in reversed(data.get("reverse_operations", [])):
+                db._manager(op)
+            db.delete("postgresdb3_migrations", "name", last_file)
 
-        db.delete("postgresdb3_migrations", "name", last_file)
         os.remove(os.path.join(self.migrations_dir, last_file))
         print(f"Muvaffaqiyatli bekor qilindi va o'chirildi: {last_file}")
 
@@ -472,9 +878,10 @@ class MigrationEngine:
         ) as f:
             data = json.load(f)
 
-        for op in reversed(data.get("reverse_operations", [])):
-            await db._manager(op, commit=True)
+        async with db.transaction():
+            for op in reversed(data.get("reverse_operations", [])):
+                await db._manager(op)
+            await db.delete("postgresdb3_migrations", "name", last_file)
 
-        await db.delete("postgresdb3_migrations", "name", last_file)
         os.remove(os.path.join(self.migrations_dir, last_file))
         print(f"Muvaffaqiyatli bekor qilindi va o'chirildi: {last_file}")

@@ -64,6 +64,18 @@ class ProgrammingError(DatabaseError):
     pass
 
 
+class UndefinedObjectError(ProgrammingError):
+    """PostgreSQL obyekti yoki turi (masalan geometry) topilmaganda yuzaga keladigan xatolik."""
+
+    pass
+
+
+class UndefinedFunctionError(ProgrammingError):
+    """PostgreSQL funksiyasi (masalan ST_DWithin) topilmaganda yuzaga keladigan xatolik."""
+
+    pass
+
+
 class TransactionError(DatabaseError):
     """Tranzaksiya muvaffaqiyatsiz tugaganda yuzaga keladigan xatolik."""
 
@@ -174,6 +186,10 @@ def translate_db_error(exc: Exception) -> Exception:
         return IntegrityError(str(exc))
     elif (sqlstate and str(sqlstate).startswith("22")) or "DataError" in exc_name:
         return DataError(str(exc))
+    elif "UndefinedObject" in exc_name or 'type "geometry"' in str(exc):
+        return UndefinedObjectError(str(exc))
+    elif "UndefinedFunction" in exc_name or "st_dwithin" in str(exc).lower():
+        return UndefinedFunctionError(str(exc))
     elif (
         (sqlstate and str(sqlstate).startswith("42"))
         or "ProgrammingError" in exc_name

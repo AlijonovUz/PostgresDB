@@ -4,9 +4,8 @@ import time
 import asyncio
 from contextlib import nullcontext, asynccontextmanager
 
-from postgresdb3 import (
-    Model,
-    AsyncModel,
+from postgresdb3 import Model, AsyncModel
+from postgresdb3.orm.fields import (
     Date,
     Time,
     Timestamp,

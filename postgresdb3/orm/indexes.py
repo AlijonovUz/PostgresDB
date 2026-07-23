@@ -1,7 +1,7 @@
 class Index:
     """
     Django-style database Index representation for PostgresDB3.
-    
+
     Usage:
         Index(fields=['first_name', 'last_name'], name='idx_user_name')
         Index(fields=['-created_at'], name='idx_created_desc')
@@ -10,6 +10,7 @@ class Index:
         Index(fields=['status'], condition="status = 'active'")
         Index(fields=['title'], include=['author_id'])
     """
+
     def __init__(
         self,
         *expressions,

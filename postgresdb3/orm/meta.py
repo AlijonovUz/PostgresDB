@@ -1,4 +1,4 @@
-from .fields import Field, ForeignKey, OneToOneField, ManyToManyField
+from .fields import Field, ForeignKey, OneToOne, ManyToMany
 from .indexes import Index
 from .relations import (
     ForeignKeyRelation,
@@ -27,7 +27,7 @@ class ModelMeta(type):
 
         for key, value in attrs.items():
             if isinstance(value, Field):
-                if isinstance(value, ForeignKey) and not isinstance(value, ManyToManyField):
+                if isinstance(value, ForeignKey) and not isinstance(value, ManyToMany):
                     if not key.endswith("_id"):
                         new_key = f"{key}_id"
                         value.name = new_key
@@ -101,21 +101,32 @@ class ModelMeta(type):
         if not attrs.get("table"):
             attrs["table"] = name.lower() + "s"
 
-        pk_name = None
-        for field_name, field in fields.items():
-            if getattr(field, "primary_key", False):
-                pk_name = field_name
-                break
+        pk_names = [
+            fname for fname, f in fields.items() if getattr(f, "primary_key", False)
+        ]
+        meta_pk = meta_options.get("primary_key") or (
+            getattr(meta_class, "primary_key", None) if meta_class else None
+        )
+        if meta_pk:
+            if isinstance(meta_pk, (list, tuple)):
+                pk_names = list(meta_pk)
+            elif isinstance(meta_pk, str):
+                pk_names = [meta_pk]
 
-        if pk_name:
-            attrs["pk"] = pk_name
+        if len(pk_names) == 1:
+            attrs["pk"] = pk_names[0]
+        elif len(pk_names) > 1:
+            attrs["pk"] = tuple(pk_names)
+            for fname in pk_names:
+                if fname in fields:
+                    fields[fname].primary_key = True
 
         cls = super().__new__(mcls, name, bases, attrs)
 
         is_async_model = any(base.__name__ == "AsyncModel" for base in bases)
 
         for field_name, field in fields.items():
-            if isinstance(field, ForeignKey) and not isinstance(field, ManyToManyField):
+            if isinstance(field, ForeignKey) and not isinstance(field, ManyToMany):
                 relation_name = (
                     field_name[:-3] if field_name.endswith("_id") else field_name
                 )
@@ -125,15 +136,21 @@ class ModelMeta(type):
                         setattr(
                             cls,
                             relation_name,
-                            AsyncForeignKeyRelation(field_name, field.to),
+                            AsyncForeignKeyRelation(
+                                field_name, field.to, field.to_field
+                            ),
                         )
                     else:
                         setattr(
-                            cls, relation_name, ForeignKeyRelation(field_name, field.to)
+                            cls,
+                            relation_name,
+                            ForeignKeyRelation(field_name, field.to, field.to_field),
                         )
 
-                related_name = field.related_name or f"{name.lower()}_set"
-                is_o2o = isinstance(field, OneToOneField)
+                is_o2o = isinstance(field, OneToOne)
+                related_name = field.related_name or (
+                    name.lower() if is_o2o else f"{name.lower()}_set"
+                )
 
                 if hasattr(field.to, related_name):
                     raise ValueError(
@@ -152,7 +169,7 @@ class ModelMeta(type):
                         field.to, related_name, ReverseRelation(cls, field_name, is_o2o)
                     )
 
-            elif isinstance(field, ManyToManyField):
+            elif isinstance(field, ManyToMany):
                 through_table = f"{cls.table}_{field.to.table}"
                 source_col = f"{name.lower()}_id"
                 target_col = f"{field.to.__name__.lower()}_id"

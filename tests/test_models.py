@@ -1,6 +1,7 @@
 import unittest
 from postgresdb3.orm.models import Model, AsyncModel
-from postgresdb3 import String, Integer, ValidationError
+from postgresdb3.orm.fields import String, Integer, Date, Time, Timestamp, Timestamptz
+from postgresdb3.orm.validators import ValidationError
 from postgresdb3.orm.meta import model_registry
 
 
@@ -57,7 +58,7 @@ class ModelsTestCase(unittest.TestCase):
 
     def test_auto_now_and_auto_now_add_defaults(self):
         import datetime
-        from postgresdb3 import Date, Time, Timestamp, Timestamptz
+        from postgresdb3.orm.fields import Date, Time, Timestamp, Timestamptz
 
         class Article(Model):
             created_date = Date(auto_now_add=True)
@@ -125,8 +126,5 @@ class ModelsTestCase(unittest.TestCase):
         asyncio.run(run_async_tests())
 
 
-
-
 if __name__ == "__main__":
     unittest.main()
-

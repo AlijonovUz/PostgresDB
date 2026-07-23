@@ -1,7 +1,8 @@
 class ForeignKeyRelation:
-    def __init__(self, field_name, related_model):
+    def __init__(self, field_name, related_model, to_field=None):
         self.field_name = field_name
         self.related_model = related_model
+        self.to_field = to_field or related_model.get_pk_name()
 
     def __get__(self, instance, owner):
         if instance is None:
@@ -11,13 +12,15 @@ class ForeignKeyRelation:
         if fk_value is None:
             return None
 
-        return self.related_model.find(fk_value).first()
+        return self.related_model.filter(**{self.to_field: fk_value}).first()
 
     def __set__(self, instance, value):
         if value is not None:
-            if hasattr(value.__class__, "get_pk_name"):
+            if hasattr(value, "to_dict") or hasattr(value.__class__, "get_pk_name"):
                 instance.__dict__[self.field_name] = getattr(
-                    value, value.__class__.get_pk_name()
+                    value,
+                    self.to_field,
+                    getattr(value, value.__class__.get_pk_name(), None),
                 )
             else:
                 instance.__dict__[self.field_name] = value
@@ -62,9 +65,10 @@ class ReverseRelation:
 
 
 class AsyncForeignKeyRelation:
-    def __init__(self, field_name, related_model):
+    def __init__(self, field_name, related_model, to_field=None):
         self.field_name = field_name
         self.related_model = related_model
+        self.to_field = to_field or related_model.get_pk_name()
 
     def __get__(self, instance, owner):
         if instance is None:
@@ -74,13 +78,15 @@ class AsyncForeignKeyRelation:
         if fk_value is None:
             return None
 
-        return self.related_model.find(fk_value)
+        return self.related_model.filter(**{self.to_field: fk_value}).first()
 
     def __set__(self, instance, value):
         if value is not None:
-            if hasattr(value.__class__, "get_pk_name"):
+            if hasattr(value, "to_dict") or hasattr(value.__class__, "get_pk_name"):
                 instance.__dict__[self.field_name] = getattr(
-                    value, value.__class__.get_pk_name()
+                    value,
+                    self.to_field,
+                    getattr(value, value.__class__.get_pk_name(), None),
                 )
             else:
                 instance.__dict__[self.field_name] = value
@@ -158,14 +164,20 @@ class ManyToManyRelation:
         if self.is_async:
 
             async def add(*targets):
-                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
+                target_ids = [
+                    getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t
+                    for t in targets
+                ]
                 values = [[pk_value, t_id] for t_id in target_ids]
                 await db.insert_many(
                     self.through_table, f"{self.source_col}, {self.target_col}", values
                 )
 
             async def remove(*targets):
-                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
+                target_ids = [
+                    getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t
+                    for t in targets
+                ]
                 placeholders = ", ".join(f"${i+2}" for i in range(len(target_ids)))
                 sql = f"DELETE FROM {self.through_table} WHERE {self.source_col} = $1 AND {self.target_col} IN ({placeholders})"
                 await db._manager(sql, pk_value, *target_ids, commit=True)
@@ -181,14 +193,20 @@ class ManyToManyRelation:
         else:
 
             def add(*targets):
-                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
+                target_ids = [
+                    getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t
+                    for t in targets
+                ]
                 values = [(pk_value, t_id) for t_id in target_ids]
                 db.insert_many(
                     self.through_table, f"{self.source_col}, {self.target_col}", values
                 )
 
             def remove(*targets):
-                target_ids = [getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t for t in targets]
+                target_ids = [
+                    getattr(t, t.get_pk_name()) if hasattr(t, "get_pk_name") else t
+                    for t in targets
+                ]
                 placeholders = ", ".join(["%s"] * len(target_ids))
                 sql = f"DELETE FROM {self.through_table} WHERE {self.source_col} = %s AND {self.target_col} IN ({placeholders})"
                 params = [pk_value] + list(target_ids)

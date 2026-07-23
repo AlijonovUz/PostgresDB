@@ -1,5 +1,5 @@
 import unittest
-from postgresdb3 import (
+from postgresdb3.orm.validators import (
     ValidationError,
     MinValueValidator,
     MaxValueValidator,

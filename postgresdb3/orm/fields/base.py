@@ -42,6 +42,43 @@ class Field:
                 return self.get_current_value()
         return self.default
 
+    def get_sql_default(self):
+        if self.default is None:
+            return None
+
+        if callable(self.default):
+            import uuid
+            import datetime
+
+            if self.default == uuid.uuid4:
+                return "gen_random_uuid()"
+            elif self.default in (datetime.datetime.now, datetime.datetime.utcnow):
+                return "CURRENT_TIMESTAMP"
+            elif self.default == datetime.date.today:
+                return "CURRENT_DATE"
+            return None
+
+        if isinstance(self.default, bool):
+            return str(self.default)
+        elif isinstance(self.default, (int, float)):
+            return str(self.default)
+        elif isinstance(self.default, str):
+            val_upper = self.default.upper()
+            if val_upper in (
+                "CURRENT_TIMESTAMP",
+                "CURRENT_DATE",
+                "CURRENT_TIME",
+                "NOW()",
+                "LOCALTIME",
+                "GEN_RANDOM_UUID()",
+            ):
+                return val_upper
+            if self.default.startswith("'") and self.default.endswith("'"):
+                return self.default
+            return f"'{self.default}'"
+
+        return str(self.default)
+
     def validate(self, value):
         if value is None:
             if (
@@ -75,7 +112,8 @@ class Field:
         if not self.nullable and not self.primary_key:
             parts.append("NOT NULL")
 
-        if self.default is not None and not callable(self.default):
-            parts.append(f"DEFAULT {self.default}")
+        sql_default = self.get_sql_default()
+        if sql_default is not None:
+            parts.append(f"DEFAULT {sql_default}")
 
         return " ".join(parts)

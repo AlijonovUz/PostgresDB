@@ -33,20 +33,84 @@ def execute_from_command_line(db, argv=None):
         action="store_true",
         help="O'chirishlar (DROP) bo'lsa ogohlantirmasdan bajarish",
     )
+    make_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Migratsiya faylini diskka yozmasdan faqat hosil bo'ladigan SQL buyruqlarini ko'rsatadi",
+    )
 
     subparsers.add_parser(
         "migrate", help="Mavjud migratsiyalarni ma'lumotlar bazasiga qo'llaydi"
     )
     subparsers.add_parser(
+        "showmigrations",
+        help="Barcha migratsiyalarning holatini (qo'llanilgan/qo'llanilmagan) ko'rsatadi",
+    )
+    subparsers.add_parser(
         "undo", help="Oxirgi migratsiyani bekor qiladi va bazadan o'chiradi"
+    )
+
+    dump_parser = subparsers.add_parser(
+        "dumpdata",
+        help="Ma'lumotlar bazasidagi modellarni JSON fixture sifatida eksport qiladi",
+    )
+    dump_parser.add_argument(
+        "filename",
+        nargs="?",
+        default="fixture.json",
+        help="Eksport qilinadigan JSON fayl nomi",
+    )
+
+    load_parser = subparsers.add_parser(
+        "loaddata",
+        help="JSON fixture faylidan ma'lumotlarni bazaga yuklaydi (Seed data)",
+    )
+    load_parser.add_argument(
+        "filename",
+        nargs="?",
+        default="fixture.json",
+        help="Yuklanadigan JSON fayl nomi",
     )
 
     args = parser.parse_args(argv[1:])
 
     if args.command == "makemigrations":
         engine = MigrationEngine()
-        print(f"'{args.name}' nomli migratsiya yaratilmoqda...")
-        engine.makemigrations(args.name, interactive=not args.no_input)
+        if not args.dry_run:
+            print(f"'{args.name}' nomli migratsiya yaratilmoqda...")
+        engine.makemigrations(
+            args.name, interactive=not args.no_input, dry_run=args.dry_run
+        )
+
+    elif args.command == "showmigrations":
+        engine = MigrationEngine()
+        if isinstance(db, PostgresDB):
+            engine.showmigrations(db)
+        elif isinstance(db, AsyncPostgresDB):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                import threading
+
+                exception = None
+
+                def run_show():
+                    nonlocal exception
+                    try:
+                        asyncio.run(engine.async_showmigrations(db))
+                    except Exception as e:
+                        exception = e
+
+                t = threading.Thread(target=run_show)
+                t.start()
+                t.join()
+                if exception:
+                    raise exception
+            else:
+                asyncio.run(engine.async_showmigrations(db))
 
     elif args.command == "migrate":
         engine = MigrationEngine()
@@ -111,6 +175,14 @@ def execute_from_command_line(db, argv=None):
                 asyncio.run(engine.async_undo_migration(db))
         else:
             print("Xato: Noma'lum DB obyekti (PostgresDB yoki AsyncPostgresDB kerak).")
+
+    elif args.command == "dumpdata":
+        engine = MigrationEngine()
+        engine.dumpdata(db, filename=args.filename)
+
+    elif args.command == "loaddata":
+        engine = MigrationEngine()
+        engine.loaddata(db, filename=args.filename)
 
     else:
         parser.print_help()

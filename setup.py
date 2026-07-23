@@ -13,7 +13,12 @@ if force_source:
 else:
     has_pq_dev = False
     try:
-        res = subprocess.run(["pg_config", "--includedir"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        res = subprocess.run(
+            ["pg_config", "--includedir"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
         if res.returncode == 0:
             includedir = res.stdout.strip()
             if os.path.exists(os.path.join(includedir, "pg_config.h")):
@@ -21,8 +26,10 @@ else:
     except Exception:
         pass
 
-    is_building_dist = any(arg in sys.argv for arg in ["bdist_wheel", "dist_info", "egg_info", "sdist"])
-    
+    is_building_dist = any(
+        arg in sys.argv for arg in ["bdist_wheel", "dist_info", "egg_info", "sdist"]
+    )
+
     if is_building_dist:
         psycopg_dependency = "psycopg2-binary>=2.9"
     elif has_pq_dev:
@@ -32,12 +39,9 @@ else:
 
 setup(
     name="postgresdb3",
-    version="2.3.0",
+    version="3.0.0",
     packages=find_packages(),
-    install_requires=[
-        psycopg_dependency,
-        "asyncpg>=0.31.0"
-    ],
+    install_requires=[psycopg_dependency, "asyncpg>=0.31.0"],
     author="Abdulbosit Alijonov",
     description="Python uchun mo'ljallangan, sinxron va asinxron ishlashni qo'llab-quvvatlaydigan o'ta tezkor va yengil PostgreSQL ORM kutubxonasi",
     long_description=long_description,
@@ -50,5 +54,5 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.9',
+    python_requires=">=3.9",
 )

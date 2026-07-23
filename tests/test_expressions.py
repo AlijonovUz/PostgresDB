@@ -1,6 +1,5 @@
 import unittest
-from postgresdb3 import Q, F, Sum, Avg, Min, Max, Count
-from postgresdb3.orm.expressions import FExpression
+from postgresdb3.orm.expressions import Q, F, Sum, Avg, Min, Max, Count, FExpression
 
 
 class ExpressionsTestCase(unittest.TestCase):

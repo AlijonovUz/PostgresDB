@@ -4,9 +4,7 @@ from .base import Field
 class Date(Field):
     sql_type = "DATE"
 
-    def __init__(
-        self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs
-    ):
+    def __init__(self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs):
         if isinstance(verbose_name, bool):
             auto_now_add = verbose_name
             verbose_name = None
@@ -25,9 +23,7 @@ class Date(Field):
 class Time(Field):
     sql_type = "TIME"
 
-    def __init__(
-        self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs
-    ):
+    def __init__(self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs):
         if isinstance(verbose_name, bool):
             auto_now_add = verbose_name
             verbose_name = None
@@ -46,9 +42,7 @@ class Time(Field):
 class Timestamp(Field):
     sql_type = "TIMESTAMP"
 
-    def __init__(
-        self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs
-    ):
+    def __init__(self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs):
         if isinstance(verbose_name, bool):
             auto_now_add = verbose_name
             verbose_name = None
@@ -67,9 +61,7 @@ class Timestamp(Field):
 class Timestamptz(Field):
     sql_type = "TIMESTAMPTZ"
 
-    def __init__(
-        self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs
-    ):
+    def __init__(self, verbose_name=None, auto_now=False, auto_now_add=False, **kwargs):
         if isinstance(verbose_name, bool):
             auto_now_add = verbose_name
             verbose_name = None
@@ -83,4 +75,3 @@ class Timestamptz(Field):
         import datetime
 
         return datetime.datetime.now(datetime.timezone.utc)
-

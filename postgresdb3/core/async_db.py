@@ -25,6 +25,7 @@ class AsyncPostgresDB:
         min_size: int = 1,
         max_size: int = 20,
         echo: bool = False,
+        slow_query_threshold: float = 500.0,
     ) -> None:
         self.database = database
         self.user = user
@@ -34,6 +35,7 @@ class AsyncPostgresDB:
         self.min_size = min_size
         self.max_size = max_size
         self.echo = echo
+        self.slow_query_threshold = slow_query_threshold
         self.pool: Optional[asyncpg.pool.Pool] = None
         self._pool_lock = None
         self._async_conn = contextvars.ContextVar(
@@ -49,6 +51,8 @@ class AsyncPostgresDB:
         commit=False,
         many=False,
     ) -> Any:
+        import time
+
         if params and "%s" in sql:
             import re
 
@@ -84,8 +88,6 @@ class AsyncPostgresDB:
             else:
                 params = tuple(_norm(v) for v in params)
 
-        if self.echo:
-            print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
         if not self.pool:
             if self._pool_lock is None:
                 self._pool_lock = asyncio.Lock()
@@ -107,6 +109,7 @@ class AsyncPostgresDB:
         if not is_transaction:
             conn = await self.pool.acquire()
 
+        start_time = time.perf_counter()
         try:
             if commit:
                 if many:
@@ -121,6 +124,16 @@ class AsyncPostgresDB:
 
             raise translate_db_error(e) from e
         finally:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            if getattr(self, "echo", False):
+                print(
+                    f"\033[94m[SQL - {duration_ms:.2f}ms]: {sql} \n[PARAMS]: {params}\033[0m"
+                )
+            if duration_ms >= getattr(self, "slow_query_threshold", 500.0):
+                print(
+                    f"\033[93m[SLOW QUERY WARNING - {duration_ms:.2f}ms]: {sql} \n[PARAMS]: {params}\033[0m"
+                )
+
             if not is_transaction:
                 await self.pool.release(conn)
 
@@ -212,7 +225,9 @@ class AsyncPostgresDB:
                     if isinstance(value, F):
                         clauses.append(f"{field} {operator_map[op]} {value.name}")
                     elif isinstance(value, FExpression):
-                        clauses.append(f"{field} {operator_map[op]} {value.name} {value.operator} ${index}")
+                        clauses.append(
+                            f"{field} {operator_map[op]} {value.name} {value.operator} ${index}"
+                        )
                         params.append(value.value)
                         index += 1
                     else:

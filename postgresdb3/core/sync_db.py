@@ -1,10 +1,12 @@
-from __future__ import annotations
+import time
+import json
+import datetime
+import threading
+from contextlib import contextmanager
 from typing import Any, Optional
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
-from contextlib import contextmanager
-import threading
 from postgresdb3.orm.expressions import Q, FExpression, F
 
 
@@ -26,9 +28,11 @@ class PostgresDB:
         maxconn: int = 20,
         echo: bool = False,
         ping_connections: bool = False,
+        slow_query_threshold: float = 500.0,
     ) -> None:
         self.echo = echo
         self.ping_connections = ping_connections
+        self.slow_query_threshold = slow_query_threshold
         self.pool = pool.ThreadedConnectionPool(
             minconn,
             maxconn,
@@ -51,33 +55,29 @@ class PostgresDB:
         fetchall: bool = False,
         fetchmany: int | None = None,
     ) -> Any:
-
         def _norm(v):
-            if v in ("CURRENT_TIMESTAMP", "NOW()"):
-                import datetime
-
+            if isinstance(v, dict):
+                return json.dumps(v)
+            elif v in ("CURRENT_TIMESTAMP", "NOW()"):
                 return datetime.datetime.now()
             elif v == "CURRENT_DATE":
-                import datetime
-
                 return datetime.date.today()
             elif v == "CURRENT_TIME":
-                import datetime
-
                 return datetime.datetime.now().time()
             return v
 
         if params:
             if many and isinstance(params, (list, tuple)):
                 params = [
-                    tuple(_norm(v) for v in row) if isinstance(row, (list, tuple)) else row
+                    (
+                        tuple(_norm(v) for v in row)
+                        if isinstance(row, (list, tuple))
+                        else row
+                    )
                     for row in params
                 ]
             elif isinstance(params, (list, tuple)):
                 params = tuple(_norm(v) for v in params)
-
-        if self.echo:
-            print(f"\033[94m[SQL]: {sql} \n[PARAMS]: {params}\033[0m")
 
         if not sql or not sql.strip():
             raise ValueError("SQL query cannot be empty")
@@ -86,48 +86,73 @@ class PostgresDB:
         if many and (fetchone or fetchall or fetchmany):
             raise ValueError("cannot use fetchone/fetchall/fetchmany with many=True")
 
-        in_transaction = getattr(self._local, "conn", None) is not None
+        max_retries = 3
+        retry_count = 0
+        start_time = time.perf_counter()
 
-        if in_transaction:
-            conn = self._local.conn
-        else:
-            while True:
-                conn = self.pool.getconn()
-                if self.ping_connections:
-                    try:
-                        with conn.cursor() as cur:
-                            cur.execute("SELECT 1")
-                        break
-                    except (psycopg2.InterfaceError, psycopg2.OperationalError):
-                        self.pool.putconn(conn, close=True)
-                else:
-                    break
-            conn.autocommit = True
-
-        try:
-            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-                if many:
-                    cursor.executemany(sql, params)
-                    result = None
-                else:
-                    cursor.execute(sql, params)
-                    if fetchone:
-                        result = cursor.fetchone()
-                    elif fetchall:
-                        result = cursor.fetchall()
-                    elif fetchmany is not None:
-                        result = cursor.fetchmany(fetchmany)
+        while True:
+            in_transaction = getattr(self._local, "conn", None) is not None
+            if in_transaction:
+                conn = self._local.conn
+            else:
+                while True:
+                    conn = self.pool.getconn()
+                    if self.ping_connections:
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT 1")
+                            break
+                        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+                            self.pool.putconn(conn, close=True)
                     else:
-                        result = None
+                        break
+                conn.autocommit = True
 
-            return result
-        except Exception as e:
-            from postgresdb3.exceptions import translate_db_error
+            try:
+                try:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                        if many:
+                            cursor.executemany(sql, params)
+                            result = None
+                        else:
+                            cursor.execute(sql, params)
+                            if fetchone:
+                                result = cursor.fetchone()
+                            elif fetchall:
+                                result = cursor.fetchall()
+                            elif fetchmany is not None:
+                                result = cursor.fetchmany(fetchmany)
+                            else:
+                                result = None
 
-            raise translate_db_error(e) from e
-        finally:
-            if not in_transaction:
-                self.pool.putconn(conn)
+                    return result
+                except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                    retry_count += 1
+                    if retry_count >= max_retries or in_transaction:
+                        from postgresdb3.exceptions import translate_db_error
+
+                        raise translate_db_error(e) from e
+                    time.sleep(0.1 * (2 ** (retry_count - 1)))
+                except Exception as e:
+                    from postgresdb3.exceptions import translate_db_error
+
+                    raise translate_db_error(e) from e
+            finally:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                if getattr(self, "echo", False):
+                    print(
+                        f"\033[94m[SQL - {duration_ms:.2f}ms]: {sql} \n[PARAMS]: {params}\033[0m"
+                    )
+                if duration_ms >= getattr(self, "slow_query_threshold", 500.0):
+                    print(
+                        f"\033[93m[SLOW QUERY WARNING - {duration_ms:.2f}ms]: {sql} \n[PARAMS]: {params}\033[0m"
+                    )
+
+                if not in_transaction:
+                    try:
+                        self.pool.putconn(conn)
+                    except Exception:
+                        pass
 
     def close(self) -> None:
         if self.pool:
@@ -198,7 +223,35 @@ class PostgresDB:
 
             for key, value in where.items():
                 if "__" in key:
-                    field, op = key.rsplit("__", 1)
+                    parts = key.split("__")
+                    last_part = parts[-1]
+                    if last_part in operator_map or last_part in (
+                        "in",
+                        "not_in",
+                        "isnull",
+                        "has_key",
+                        "has_keys",
+                        "json_contains",
+                        "search",
+                        "distance_lte",
+                        "dwithin",
+                    ):
+                        op = last_part
+                        path_parts = parts[:-1]
+                    else:
+                        op = "eq"
+                        path_parts = parts
+
+                    if len(path_parts) > 1:
+                        json_field = path_parts[0]
+                        json_keys = path_parts[1:]
+                        if len(json_keys) == 1:
+                            field = f"{json_field}->>'{json_keys[0]}'"
+                        else:
+                            middle = "->".join([f"'{k}'" for k in json_keys[:-1]])
+                            field = f"{json_field}->{middle}->>'{json_keys[-1]}'"
+                    else:
+                        field = path_parts[0]
                 else:
                     field, op = key, "eq"
 
@@ -206,9 +259,13 @@ class PostgresDB:
                     if isinstance(value, F):
                         clauses.append(f"{field} {operator_map[op]} {value.name}")
                     elif isinstance(value, FExpression):
-                        clauses.append(f"{field} {operator_map[op]} {value.name} {value.operator} %s")
+                        clauses.append(
+                            f"{field} {operator_map[op]} {value.name} {value.operator} %s"
+                        )
                         params.append(value.value)
                     else:
+                        if isinstance(value, bool) and "->" in field:
+                            value = "true" if value else "false"
                         if op in ("contains", "icontains"):
                             value = f"%{value}%"
                         elif op in ("startswith", "istartswith"):
@@ -217,6 +274,41 @@ class PostgresDB:
                             value = f"%{value}"
                         clauses.append(f"{field} {operator_map[op]} %s")
                         params.append(value)
+
+                elif op == "search":
+                    clauses.append(
+                        f"to_tsvector('english', {field}) @@ plainto_tsquery('english', %s)"
+                    )
+                    params.append(str(value))
+
+                elif op in ("distance_lte", "dwithin"):
+                    if not isinstance(value, (list, tuple)) or len(value) < 3:
+                        raise ValueError(
+                            f"{field}__{op} uchun (lat, lon, distance_meters) tuple kerak"
+                        )
+                    lat, lon, dist = value[0], value[1], value[2]
+                    clauses.append(
+                        f"ST_DWithin({field}::geography, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s)"
+                    )
+                    params.extend([lon, lat, dist])
+
+                elif op == "has_key":
+                    clauses.append(f"{field} ? %s")
+                    params.append(str(value))
+
+                elif op == "has_keys":
+                    if not isinstance(value, (list, tuple)):
+                        raise ValueError(f"{field}__has_keys uchun list/tuple kerak")
+                    clauses.append(f"{field} ?& %s")
+                    params.append(list(value))
+
+                elif op == "json_contains":
+                    import json
+
+                    clauses.append(f"{field} @> %s::jsonb")
+                    params.append(
+                        json.dumps(value) if not isinstance(value, str) else value
+                    )
 
                 elif op == "in":
                     if not isinstance(value, (list, tuple)) or not value:

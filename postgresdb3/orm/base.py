@@ -94,10 +94,24 @@ class BaseModel:
 
     @classmethod
     def get_pk_name(cls):
-        for name, field in cls._fields.items():
-            if getattr(field, "primary_key", False):
-                return name
-        return cls.pk
+        if hasattr(cls, "pk"):
+            return cls.pk
+        pks = [
+            name
+            for name, field in cls._fields.items()
+            if getattr(field, "primary_key", False)
+        ]
+        if len(pks) == 1:
+            return pks[0]
+        elif len(pks) > 1:
+            return tuple(pks)
+        return "id"
+
+    def get_pk_value(self):
+        pk_name = self.get_pk_name()
+        if isinstance(pk_name, (list, tuple)):
+            return tuple(getattr(self, k, None) for k in pk_name)
+        return getattr(self, pk_name, None)
 
     @classmethod
     def _normalize_kwargs(cls, kwargs):
@@ -126,3 +140,121 @@ class BaseModel:
             if field.to_sql()
         )
         return f"<{self.__class__.__name__} {fields}>"
+
+    @classmethod
+    def to_pydantic(cls, name=None, exclude=None, include=None):
+        """
+        Model ma'lumotlari, tiplari va cheklovlaridan kelib chiqib dynamic Pydantic BaseModel yaratadi.
+        FastAPI bilan ishlashda response_model va request body uchun xizmat qiladi.
+        """
+        try:
+            import pydantic
+            from pydantic import create_model, Field as PydanticField
+        except ImportError:
+            raise ImportError(
+                "Pydantic o'rnatilmagan. Iltimos 'pip install pydantic' buyrug'i orqali o'rnating."
+            )
+
+        import typing
+
+        model_name = name or f"{cls.__name__}Pydantic"
+        fields_dict = {}
+        exclude_set = set(exclude or [])
+
+        include_set = set(include) if include is not None else None
+
+        for field_name, field in cls._fields.items():
+            if not field.to_sql():
+                continue
+            if include_set is not None and field_name not in include_set:
+                continue
+            if field_name in exclude_set:
+                continue
+
+            py_type = cls._get_field_python_type(field)
+
+            field_kwargs = {}
+            if getattr(field, "length", None):
+                field_kwargs["max_length"] = field.length
+
+            default_val = ...
+            if field.nullable:
+                py_type = typing.Optional[py_type]
+                default_val = None
+
+            if getattr(field, "validators", None):
+                try:
+                    from pydantic import AfterValidator
+
+                    for v_func in field.validators:
+
+                        def _make_validator(fn):
+                            def _validate(val):
+                                if val is not None:
+                                    try:
+                                        fn(val)
+                                    except Exception as err:
+                                        raise ValueError(
+                                            getattr(err, "message", str(err))
+                                        )
+                                return val
+
+                            return _validate
+
+                        py_type = typing.Annotated[
+                            py_type, AfterValidator(_make_validator(v_func))
+                        ]
+                except Exception:
+                    pass
+
+            fields_dict[field_name] = (
+                py_type,
+                PydanticField(default=default_val, **field_kwargs),
+            )
+
+        return create_model(model_name, **fields_dict)
+
+    @classmethod
+    def _get_field_python_type(cls, field):
+        import datetime
+        import uuid
+        import typing
+
+        field_cls_name = field.__class__.__name__
+
+        if field_cls_name in (
+            "Integer",
+            "BigInteger",
+            "SmallInteger",
+            "Serial",
+            "BigSerial",
+            "ForeignKey",
+            "OneToOne",
+        ):
+            return int
+        elif field_cls_name in ("Float", "Double"):
+            return float
+        elif field_cls_name in ("Decimal",):
+            import decimal
+
+            return decimal.Decimal
+        elif field_cls_name in ("String", "Text"):
+            return str
+        elif field_cls_name in ("Boolean",):
+            return bool
+        elif field_cls_name in ("Timestamp", "Timestamptz"):
+            return datetime.datetime
+        elif field_cls_name in ("Date",):
+            return datetime.date
+        elif field_cls_name in ("Time",):
+            return datetime.time
+        elif field_cls_name in ("UUID",):
+            return uuid.UUID
+        elif field_cls_name in ("Point",):
+            return typing.Tuple[float, float]
+        elif field_cls_name in ("JSON", "JSONB"):
+            return typing.Dict[str, typing.Any]
+        elif field_cls_name in ("Array",):
+            return typing.List[typing.Any]
+
+        return typing.Any

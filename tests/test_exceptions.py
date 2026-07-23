@@ -1,5 +1,5 @@
 import unittest
-from postgresdb3 import (
+from postgresdb3.exceptions import (
     PostgresDBError,
     DatabaseError,
     IntegrityError,
@@ -14,10 +14,10 @@ from postgresdb3 import (
     ObjectDoesNotExist,
     DoesNotExist,
     MultipleObjectsReturned,
-    ValidationError,
     ModelSetupError,
+    translate_db_error,
 )
-from postgresdb3.exceptions import translate_db_error
+from postgresdb3.orm.validators import ValidationError
 
 
 class ExceptionsTestCase(unittest.TestCase):
@@ -48,7 +48,9 @@ class ExceptionsTestCase(unittest.TestCase):
         class DummyPsycopg2UniqueError(Exception):
             pgcode = "23505"
 
-        err = translate_db_error(DummyPsycopg2UniqueError("duplicate key value violates unique constraint"))
+        err = translate_db_error(
+            DummyPsycopg2UniqueError("duplicate key value violates unique constraint")
+        )
         self.assertIsInstance(err, UniqueViolationError)
         self.assertIsInstance(err, IntegrityError)
         self.assertIsInstance(err, DatabaseError)
@@ -57,14 +59,20 @@ class ExceptionsTestCase(unittest.TestCase):
         class DummyAsyncpgFKError(Exception):
             sqlstate = "23503"
 
-        err = translate_db_error(DummyAsyncpgFKError("insert or update on table violates foreign key constraint"))
+        err = translate_db_error(
+            DummyAsyncpgFKError(
+                "insert or update on table violates foreign key constraint"
+            )
+        )
         self.assertIsInstance(err, ForeignKeyViolationError)
 
     def test_translate_db_error_not_null_violation(self):
         class DummyNotNullError(Exception):
             pgcode = "23502"
 
-        err = translate_db_error(DummyNotNullError("null value in column violates not-null constraint"))
+        err = translate_db_error(
+            DummyNotNullError("null value in column violates not-null constraint")
+        )
         self.assertIsInstance(err, NotNullViolationError)
 
     def test_translate_db_error_check_violation(self):
@@ -90,11 +98,13 @@ class ExceptionsTestCase(unittest.TestCase):
         db.echo = False
         mock_pool = MagicMock()
         mock_conn = MagicMock()
-        
+
         class FakePsycopg2UniqueError(Exception):
             pgcode = "23505"
 
-        mock_conn.cursor.return_value.__enter__.return_value.execute.side_effect = FakePsycopg2UniqueError("duplicate key")
+        mock_conn.cursor.return_value.__enter__.return_value.execute.side_effect = (
+            FakePsycopg2UniqueError("duplicate key")
+        )
         mock_pool.getconn.return_value = mock_conn
         db.pool = mock_pool
         db.ping_connections = False
@@ -117,7 +127,9 @@ class ExceptionsTestCase(unittest.TestCase):
             sqlstate = "23505"
 
         mock_conn = MagicMock()
-        mock_conn.execute = AsyncMock(side_effect=FakeAsyncpgUniqueError("duplicate key"))
+        mock_conn.execute = AsyncMock(
+            side_effect=FakeAsyncpgUniqueError("duplicate key")
+        )
 
         mock_pool = MagicMock()
         mock_pool.acquire = AsyncMock(return_value=mock_conn)
@@ -144,7 +156,9 @@ class ExceptionsTestCase(unittest.TestCase):
 
         mock_tx = MagicMock()
         mock_tx.__aenter__ = AsyncMock(return_value=None)
-        mock_tx.__aexit__ = AsyncMock(side_effect=FakeAsyncpgFKError("foreign key error"))
+        mock_tx.__aexit__ = AsyncMock(
+            side_effect=FakeAsyncpgFKError("foreign key error")
+        )
 
         mock_conn = MagicMock()
         mock_conn.transaction.return_value = mock_tx
@@ -164,4 +178,3 @@ class ExceptionsTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

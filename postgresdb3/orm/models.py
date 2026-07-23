@@ -125,7 +125,8 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         kwargs = cls._normalize_kwargs(kwargs)
         kwargs = {
-            k: v for k, v in kwargs.items()
+            k: v
+            for k, v in kwargs.items()
             if not (cls._fields.get(k) and not cls._fields[k].to_sql())
         }
 
@@ -134,20 +135,32 @@ class Model(BaseModel, metaclass=ModelMeta):
                 continue
             if getattr(field, "auto_now", False):
                 kwargs[key] = field.get_current_value()
-            elif key not in kwargs or kwargs[key] is None or kwargs[key] in ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "NOW()"):
+            elif (
+                key not in kwargs
+                or kwargs[key] is None
+                or kwargs[key]
+                in ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "NOW()")
+            ):
                 if getattr(field, "auto_now_add", False):
                     kwargs[key] = field.get_current_value()
                 elif field.default is not None:
                     kwargs[key] = field.get_default_value()
 
-        if not kwargs:
-            raise ValueError("Create requires at least one field to insert")
+        from postgresdb3.orm.signals import pre_save, post_save
+
+        instance = cls(**kwargs)
+        instance.clean()
+        instance.before_save()
+        pre_save.send(sender=cls, instance=instance, created=True)
 
         columns = ", ".join(kwargs.keys())
         values = tuple(kwargs.values())
 
         record = cls.db.insert(cls.table, columns, values, returning="*")
-        return cls._from_record(record)
+        obj = cls._from_record(record)
+        obj.after_save(created=True)
+        post_save.send(sender=cls, instance=obj, created=True)
+        return obj
 
     @classmethod
     def get_or_create(cls, defaults=None, **kwargs):
@@ -239,12 +252,15 @@ class Model(BaseModel, metaclass=ModelMeta):
         pass
 
     def save(self):
+        from postgresdb3.orm.signals import pre_save, post_save
+
         self.__class__._check_setup()
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
+        is_created = pk_value is None
 
-        if pk_value is None:
+        if is_created:
             for field_name, field in self.__class__._fields.items():
                 if getattr(field, "auto_now", False):
                     setattr(self, field_name, field.get_current_value())
@@ -254,6 +270,7 @@ class Model(BaseModel, metaclass=ModelMeta):
 
             self.clean()
             self.before_save()
+            pre_save.send(sender=self.__class__, instance=self, created=True)
 
             data = self.to_dict()
             if data.get(pk_name) is None:
@@ -264,6 +281,7 @@ class Model(BaseModel, metaclass=ModelMeta):
                 if field.to_sql():
                     setattr(self, field_name, getattr(created, field_name, None))
             self.after_save(created=True)
+            post_save.send(sender=self.__class__, instance=self, created=True)
             return self
 
         for field_name, field in self.__class__._fields.items():
@@ -272,6 +290,7 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         self.clean()
         self.before_save()
+        pre_save.send(sender=self.__class__, instance=self, created=False)
 
         data = {}
         for field_name, field in self.__class__._fields.items():
@@ -283,6 +302,7 @@ class Model(BaseModel, metaclass=ModelMeta):
         self.__class__.db.update_fields(self.__class__.table, data, pk_name, pk_value)
 
         self.after_save(created=False)
+        post_save.send(sender=self.__class__, instance=self, created=False)
         return self
 
     def update(self, **kwargs):
@@ -327,8 +347,11 @@ class Model(BaseModel, metaclass=ModelMeta):
         return self
 
     def delete(self):
+        from postgresdb3.orm.signals import pre_delete, post_delete
+
         self.__class__._check_setup()
         self.before_delete()
+        pre_delete.send(sender=self.__class__, instance=self)
 
         pk_name = self.__class__.get_pk_name()
         pk_value = getattr(self, pk_name, None)
@@ -338,6 +361,7 @@ class Model(BaseModel, metaclass=ModelMeta):
 
         self.__class__.db.delete(self.__class__.table, pk_name, pk_value)
         self.after_delete()
+        post_delete.send(sender=self.__class__, instance=self)
         return True
 
 
@@ -464,7 +488,8 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
 
         kwargs = cls._normalize_kwargs(kwargs)
         kwargs = {
-            k: v for k, v in kwargs.items()
+            k: v
+            for k, v in kwargs.items()
             if not (cls._fields.get(k) and not cls._fields[k].to_sql())
         }
 
@@ -473,20 +498,47 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
                 continue
             if getattr(field, "auto_now", False):
                 kwargs[key] = field.get_current_value()
-            elif key not in kwargs or kwargs[key] is None or kwargs[key] in ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "NOW()"):
+            elif (
+                key not in kwargs
+                or kwargs[key] is None
+                or kwargs[key]
+                in ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "NOW()")
+            ):
                 if getattr(field, "auto_now_add", False):
                     kwargs[key] = field.get_current_value()
                 elif field.default is not None:
                     kwargs[key] = field.get_default_value()
 
-        if not kwargs:
-            raise ValueError("Create requires at least one field to insert")
+        from postgresdb3.orm.signals import pre_save, post_save
+
+        import inspect
+
+        instance = cls(**kwargs)
+        if inspect.iscoroutinefunction(instance.clean):
+            await instance.clean()
+        else:
+            instance.clean()
+
+        if inspect.iscoroutinefunction(instance.before_save):
+            await instance.before_save()
+        else:
+            instance.before_save()
+
+        await pre_save.send_async(sender=cls, instance=instance, created=True)
 
         columns = ", ".join(kwargs.keys())
         values = tuple(kwargs.values())
         record = await cls.db.insert(cls.table, columns, values, returning="*")
 
-        return cls._from_record(record)
+        obj = cls._from_record(record)
+
+        if inspect.iscoroutinefunction(obj.after_save):
+            await obj.after_save(created=True)
+        else:
+            obj.after_save(created=True)
+
+        await post_save.send_async(sender=cls, instance=obj, created=True)
+        return obj
 
     @classmethod
     async def get_or_create(cls, defaults=None, **kwargs):
@@ -543,7 +595,9 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
             if col not in fields_to_update and col != pk_name:
                 fields_to_update.append(col)
 
-        set_clause = ", ".join([f"{f} = ${i+1}" for i, f in enumerate(fields_to_update)])
+        set_clause = ", ".join(
+            [f"{f} = ${i+1}" for i, f in enumerate(fields_to_update)]
+        )
         sql = f"UPDATE {cls.table} SET {set_clause} WHERE {pk_name} = ${len(fields_to_update)+1}"
 
         values_list = []

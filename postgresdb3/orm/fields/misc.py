@@ -29,3 +29,17 @@ class Array(Field):
     @property
     def sql_type(self):
         return f"{self.base_type}[]"
+
+
+class Point(Field):
+    """
+    PostGIS GeoSpatial Point Maydoni (Koordinatalar uchun: lat, lon).
+    """
+
+    def __init__(self, srid=4326, **kwargs):
+        super().__init__(**kwargs)
+        self.srid = srid
+
+    @property
+    def sql_type(self):
+        return f"geometry(Point, {self.srid})"
