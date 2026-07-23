@@ -64,6 +64,18 @@ class ProgrammingError(DatabaseError):
     pass
 
 
+class UndefinedTableError(ProgrammingError):
+    """Ma'lumotlar bazasida jadval topilmaganda yuzaga keladigan xatolik (relation does not exist)."""
+
+    pass
+
+
+class UndefinedColumnError(ProgrammingError):
+    """Ma'lumotlar bazasida ustun topilmaganda yuzaga keladigan xatolik (column does not exist)."""
+
+    pass
+
+
 class UndefinedObjectError(ProgrammingError):
     """PostgreSQL obyekti yoki turi (masalan geometry) topilmaganda yuzaga keladigan xatolik."""
 
@@ -88,7 +100,6 @@ class ObjectDoesNotExist(PostgresDBError, ValueError):
     pass
 
 
-# Qulaylik uchun qisqa taxallus
 DoesNotExist = ObjectDoesNotExist
 
 
@@ -114,6 +125,10 @@ def translate_db_error(exc: Exception) -> Exception:
     try:
         import asyncpg.exceptions as a_exc
 
+        if isinstance(exc, a_exc.UndefinedTableError):
+            return UndefinedTableError(str(exc))
+        if isinstance(exc, a_exc.UndefinedColumnError):
+            return UndefinedColumnError(str(exc))
         if isinstance(exc, a_exc.UniqueViolationError):
             return UniqueViolationError(str(exc))
         if isinstance(exc, a_exc.ForeignKeyViolationError):
@@ -135,14 +150,7 @@ def translate_db_error(exc: Exception) -> Exception:
             ),
         ):
             return OperationalError(str(exc))
-        if isinstance(
-            exc,
-            (
-                a_exc.PostgresSyntaxError,
-                a_exc.UndefinedTableError,
-                a_exc.UndefinedColumnError,
-            ),
-        ):
+        if isinstance(exc, a_exc.PostgresSyntaxError):
             return ProgrammingError(str(exc))
     except ImportError:
         pass
@@ -151,6 +159,10 @@ def translate_db_error(exc: Exception) -> Exception:
         import psycopg2
         import psycopg2.errors as p_exc
 
+        if isinstance(exc, p_exc.UndefinedTable):
+            return UndefinedTableError(str(exc))
+        if isinstance(exc, p_exc.UndefinedColumn):
+            return UndefinedColumnError(str(exc))
         if isinstance(exc, p_exc.UniqueViolation):
             return UniqueViolationError(str(exc))
         if isinstance(exc, p_exc.ForeignKeyViolation):
@@ -166,49 +178,57 @@ def translate_db_error(exc: Exception) -> Exception:
         if isinstance(exc, psycopg2.OperationalError):
             return OperationalError(str(exc))
         if isinstance(exc, psycopg2.ProgrammingError):
-            return ProgrammingError(str(exc))
+            exc_str = str(exc)
+            if "UndefinedTable" in exc.__class__.__name__ or 'relation "' in exc_str and "does not exist" in exc_str:
+                return UndefinedTableError(exc_str)
+            if "UndefinedColumn" in exc.__class__.__name__ or 'column "' in exc_str and "does not exist" in exc_str:
+                return UndefinedColumnError(exc_str)
+            return ProgrammingError(exc_str)
     except (ImportError, AttributeError):
         pass
 
     sqlstate = getattr(exc, "pgcode", None) or getattr(exc, "sqlstate", None)
     exc_name = exc.__class__.__name__
+    exc_msg = str(exc)
 
-    if sqlstate == "23505" or "UniqueViolation" in exc_name:
-        return UniqueViolationError(str(exc))
+    if sqlstate == "42P01" or "UndefinedTable" in exc_name or ('relation "' in exc_msg and "does not exist" in exc_msg):
+        return UndefinedTableError(exc_msg)
+    elif sqlstate == "42703" or "UndefinedColumn" in exc_name or ('column "' in exc_msg and "does not exist" in exc_msg):
+        return UndefinedColumnError(exc_msg)
+    elif sqlstate == "23505" or "UniqueViolation" in exc_name:
+        return UniqueViolationError(exc_msg)
     elif sqlstate == "23503" or "ForeignKeyViolation" in exc_name:
-        return ForeignKeyViolationError(str(exc))
+        return ForeignKeyViolationError(exc_msg)
     elif sqlstate == "23502" or "NotNullViolation" in exc_name:
-        return NotNullViolationError(str(exc))
+        return NotNullViolationError(exc_msg)
     elif sqlstate == "23514" or "CheckViolation" in exc_name:
-        return CheckViolationError(str(exc))
+        return CheckViolationError(exc_msg)
     elif (sqlstate and str(sqlstate).startswith("23")) or "Integrity" in exc_name:
-        return IntegrityError(str(exc))
+        return IntegrityError(exc_msg)
     elif (sqlstate and str(sqlstate).startswith("22")) or "DataError" in exc_name:
-        return DataError(str(exc))
-    elif "UndefinedObject" in exc_name or 'type "geometry"' in str(exc):
-        return UndefinedObjectError(str(exc))
-    elif "UndefinedFunction" in exc_name or "st_dwithin" in str(exc).lower():
-        return UndefinedFunctionError(str(exc))
+        return DataError(exc_msg)
+    elif "UndefinedObject" in exc_name or 'type "geometry"' in exc_msg:
+        return UndefinedObjectError(exc_msg)
+    elif "UndefinedFunction" in exc_name or "st_dwithin" in exc_msg.lower():
+        return UndefinedFunctionError(exc_msg)
     elif (
         (sqlstate and str(sqlstate).startswith("42"))
         or "ProgrammingError" in exc_name
-        or "UndefinedTable" in exc_name
-        or "UndefinedColumn" in exc_name
         or "SyntaxError" in exc_name
     ):
-        return ProgrammingError(str(exc))
+        return ProgrammingError(exc_msg)
     elif (
         (sqlstate and str(sqlstate).startswith("08"))
         or "OperationalError" in exc_name
         or "Connection" in exc_name
         or "InterfaceError" in exc_name
     ):
-        return OperationalError(str(exc))
+        return OperationalError(exc_msg)
     elif (
         (sqlstate and str(sqlstate).startswith("40"))
         or "Transaction" in exc_name
         or "Deadlock" in exc_name
     ):
-        return TransactionError(str(exc))
+        return TransactionError(exc_msg)
 
-    return DatabaseError(str(exc))
+    return DatabaseError(exc_msg)

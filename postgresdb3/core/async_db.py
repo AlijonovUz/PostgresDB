@@ -88,26 +88,33 @@ class AsyncPostgresDB:
             else:
                 params = tuple(_norm(v) for v in params)
 
-        if not self.pool:
-            if self._pool_lock is None:
-                self._pool_lock = asyncio.Lock()
-            async with self._pool_lock:
-                if not self.pool:
-                    self.pool = await asyncpg.create_pool(
-                        database=self.database,
-                        user=self.user,
-                        password=self.password,
-                        host=self.host,
-                        port=self.port,
-                        min_size=self.min_size,
-                        max_size=self.max_size,
-                    )
+        conn = None
+        is_transaction = False
+        try:
+            if not self.pool:
+                if self._pool_lock is None:
+                    self._pool_lock = asyncio.Lock()
+                async with self._pool_lock:
+                    if not self.pool:
+                        self.pool = await asyncpg.create_pool(
+                            database=self.database,
+                            user=self.user,
+                            password=self.password,
+                            host=self.host,
+                            port=self.port,
+                            min_size=self.min_size,
+                            max_size=self.max_size,
+                        )
 
-        conn = self._async_conn.get()
-        is_transaction = conn is not None
+            conn = self._async_conn.get()
+            is_transaction = conn is not None
 
-        if not is_transaction:
-            conn = await self.pool.acquire()
+            if not is_transaction:
+                conn = await self.pool.acquire()
+        except Exception as e:
+            from postgresdb3.exceptions import translate_db_error
+
+            raise translate_db_error(e) from e
 
         start_time = time.perf_counter()
         try:
@@ -134,8 +141,26 @@ class AsyncPostgresDB:
                     f"\033[93m[SLOW QUERY WARNING - {duration_ms:.2f}ms]: {sql} \n[PARAMS]: {params}\033[0m"
                 )
 
-            if not is_transaction:
+            if not is_transaction and conn is not None and self.pool is not None:
                 await self.pool.release(conn)
+
+    async def raw(
+        self,
+        sql: str,
+        *params,
+        commit: bool = False,
+        many: bool = False,
+        fetchone: bool = False,
+        fetchall: bool = False,
+    ) -> Any:
+        return await self._manager(
+            sql,
+            *params,
+            commit=commit,
+            many=many,
+            fetchone=fetchone,
+            fetchall=fetchall,
+        )
 
     async def close_pool(self) -> None:
         if self.pool:

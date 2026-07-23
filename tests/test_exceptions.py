@@ -10,6 +10,8 @@ from postgresdb3.exceptions import (
     OperationalError,
     DataError,
     ProgrammingError,
+    UndefinedTableError,
+    UndefinedColumnError,
     TransactionError,
     ObjectDoesNotExist,
     DoesNotExist,
@@ -34,6 +36,8 @@ class ExceptionsTestCase(unittest.TestCase):
         self.assertTrue(issubclass(OperationalError, DatabaseError))
         self.assertTrue(issubclass(DataError, DatabaseError))
         self.assertTrue(issubclass(ProgrammingError, DatabaseError))
+        self.assertTrue(issubclass(UndefinedTableError, ProgrammingError))
+        self.assertTrue(issubclass(UndefinedColumnError, ProgrammingError))
         self.assertTrue(issubclass(TransactionError, DatabaseError))
 
         # DoesNotExist and MultipleObjectsReturned compatibility
@@ -43,6 +47,23 @@ class ExceptionsTestCase(unittest.TestCase):
         self.assertTrue(issubclass(MultipleObjectsReturned, ValueError))
         self.assertTrue(issubclass(ValidationError, ValueError))
         self.assertTrue(issubclass(ModelSetupError, ValueError))
+
+    def test_translate_db_error_undefined_table(self):
+        import asyncpg.exceptions as a_exc
+
+        asyncpg_err = a_exc.UndefinedTableError('relation "users" does not exist')
+        err = translate_db_error(asyncpg_err)
+        self.assertIsInstance(err, UndefinedTableError)
+        self.assertIsInstance(err, ProgrammingError)
+        self.assertIsInstance(err, DatabaseError)
+
+        class DummyUndefinedTable(Exception):
+            sqlstate = "42P01"
+
+        dummy_err = translate_db_error(
+            DummyUndefinedTable('relation "users" does not exist')
+        )
+        self.assertIsInstance(dummy_err, UndefinedTableError)
 
     def test_translate_db_error_unique_violation(self):
         class DummyPsycopg2UniqueError(Exception):
