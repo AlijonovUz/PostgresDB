@@ -39,7 +39,7 @@ else:
 
 setup(
     name="postgresdb3",
-    version="3.0.2",
+    version="3.0.3",
     packages=find_packages(),
     install_requires=[
         psycopg_dependency,

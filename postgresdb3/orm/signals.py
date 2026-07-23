@@ -1,6 +1,7 @@
+from __future__ import annotations
 import inspect
 import asyncio
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, List, Tuple, Union
 
 
 class Signal:

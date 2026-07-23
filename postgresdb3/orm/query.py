@@ -1,5 +1,6 @@
+from __future__ import annotations
 from dataclasses import dataclass
-from typing import TypeVar, Generic
+from typing import TypeVar, Generic, Any, Optional, List, Tuple, Dict, Union
 from postgresdb3.orm.expressions import Q
 
 T = TypeVar("T")
