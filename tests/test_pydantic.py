@@ -4,6 +4,13 @@ from postgresdb3.orm.meta import model_registry
 
 
 class TestPydanticSchemaGeneration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import pydantic
+        except ImportError:
+            raise unittest.SkipTest("pydantic is not installed")
+
     def setUp(self):
         model_registry.clear()
 
