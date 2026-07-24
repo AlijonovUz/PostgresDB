@@ -72,7 +72,15 @@ class QuerySet:
         qs._cache_ttl = ttl
         return qs
 
-    def update(self, **kwargs):
+    def force(self):
+        """
+        Ommaviy update/delete operatsiyalarini shartsiz (barcha qatorlarda) bajarishga ruxsat beradi.
+        """
+        qs = self._clone()
+        qs._force = True
+        return qs
+
+    def update(self, force: bool = False, **kwargs):
         self.model._check_setup()
 
         if not kwargs:
@@ -91,18 +99,24 @@ class QuerySet:
 
         where = self._build_where()
 
-        if not where:
-            raise ValueError("Yangilash uchun shart berilishi kerak")
+        if not where and not (force or getattr(self, "_force", False)):
+            raise ValueError(
+                "Ommaviy update uchun filter sharti kerak! "
+                "(Butun jadvalni yangilash uchun force=True yoki .force() ishlating)"
+            )
 
         return self.model.db.update_where(self.model.table, kwargs, where)
 
-    def delete(self):
+    def delete(self, force: bool = False):
         self.model._check_setup()
 
         where = self._build_where()
 
-        if not where:
-            raise ValueError("O'chirish uchun shart berilishi kerak")
+        if not where and not (force or getattr(self, "_force", False)):
+            raise ValueError(
+                "Ommaviy delete uchun filter sharti kerak! "
+                "(Butun jadvalni o'chirish uchun force=True yoki .force() ishlating)"
+            )
 
         return self.model.db.delete_where(self.model.table, where)
 
@@ -113,17 +127,58 @@ class QuerySet:
         qs._join.append((join_type, table, on_condition))
         return qs
 
+    def _build_values_columns(self, fields):
+        if not fields:
+            return "*"
+        parsed_fields = []
+        from postgresdb3.orm.relations import (
+            ForeignKeyRelation,
+            AsyncForeignKeyRelation,
+        )
+
+        for field in fields:
+            if "__" in field:
+                parts = field.split("__")
+                rel_name = parts[0]
+                col_name = "__".join(parts[1:])
+                rel_attr = getattr(self.model, rel_name, None)
+                if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    target_model = rel_attr.related_model
+                    target_table = target_model.table
+                    db_col = rel_attr.field_name
+                    on_condition = f"{self.model.table}.{db_col} = {target_table}.{target_model.get_pk_name()}"
+                    if not self._join:
+                        self._join = []
+                    if not any(j[1] == target_table for j in self._join):
+                        self._join.append(("LEFT JOIN", target_table, on_condition))
+                    parsed_fields.append(f"{target_table}.{col_name} AS \"{field}\"")
+                    continue
+            if "." not in field:
+                parsed_fields.append(f"{self.model.table}.{field} AS \"{field}\"")
+            else:
+                parsed_fields.append(field)
+
+        return ", ".join(parsed_fields)
+
     def _get_columns_sql(self):
         if self._columns != "*":
             columns = self._columns
         elif self._select_related:
             cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
-            for rel_name in self._select_related:
-                rel_attr = getattr(self.model, rel_name, None)
-                if rel_attr and hasattr(rel_attr, "related_model"):
-                    rmodel = rel_attr.related_model
-                    for rf in rmodel._fields.keys():
-                        cols.append(f"{rmodel.table}.{rf} AS __rel__{rel_name}__{rf}")
+            for rel_str in self._select_related:
+                parts = rel_str.split("__")
+                curr_model = self.model
+                curr_alias = self.model.table
+                for p in parts:
+                    rel_attr = getattr(curr_model, p, None)
+                    if rel_attr and hasattr(rel_attr, "related_model"):
+                        curr_model = rel_attr.related_model
+                        curr_alias = f"{curr_alias}__{p}" if curr_alias != self.model.table else curr_model.table
+                    else:
+                        break
+                if curr_model != self.model:
+                    for rf in curr_model._fields.keys():
+                        cols.append(f"{curr_alias}.{rf} AS __rel__{rel_str}__{rf}")
             columns = ", ".join(cols)
         elif self._join or (hasattr(self, "_annotations") and self._annotations):
             columns = f"{self.model.table}.*"
@@ -161,18 +216,30 @@ class QuerySet:
                 main_data = {k: v for k, v in row.items() if not k.startswith("__rel__")}
                 inst = self.model._from_record(main_data)
 
-                for rel_name in self._select_related:
-                    prefix = f"__rel__{rel_name}__"
+                sorted_rels = sorted(self._select_related, key=lambda x: len(x.split("__")))
+                hydrated_map = {"": inst}
+
+                for rel_str in sorted_rels:
+                    prefix = f"__rel__{rel_str}__"
                     rel_data = {k[len(prefix):]: v for k, v in row.items() if k.startswith(prefix)}
-                    rel_attr = getattr(self.model, rel_name, None)
-                    if rel_attr and hasattr(rel_attr, "related_model"):
-                        rmodel = rel_attr.related_model
-                        pk_col = rmodel.get_pk_name()
-                        if rel_data and rel_data.get(pk_col) is not None:
-                            rel_inst = rmodel._from_record(rel_data)
-                        else:
-                            rel_inst = None
-                        setattr(inst, f"_prefetched_{rel_name}", rel_inst)
+
+                    parts = rel_str.split("__")
+                    parent_path = "__".join(parts[:-1])
+                    current_field = parts[-1]
+
+                    parent_inst = hydrated_map.get(parent_path)
+                    if parent_inst:
+                        rel_attr = getattr(parent_inst.__class__, current_field, None)
+                        if rel_attr and hasattr(rel_attr, "related_model"):
+                            rmodel = rel_attr.related_model
+                            pk_col = rmodel.get_pk_name()
+                            if rel_data and rel_data.get(pk_col) is not None:
+                                rel_inst = rmodel._from_record(rel_data)
+                            else:
+                                rel_inst = None
+                            setattr(parent_inst, f"_prefetched_{current_field}", rel_inst)
+                            if rel_inst:
+                                hydrated_map[rel_str] = rel_inst
             else:
                 inst = self.model._from_record(row)
 
@@ -183,8 +250,7 @@ class QuerySet:
     def select_related(self, *fields):
         """
         N+1 muammosini oldini olish uchun yozilgan metod.
-        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi.
-        `category` va `category_id` ko'rinishida ham berish mumkin.
+        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi (shuningdek zanjirsimon `category__parent` ham qo'llab-quvvatlanadi).
         """
         qs = self._clone()
         if qs._join is None:
@@ -199,39 +265,55 @@ class QuerySet:
         from .fields.foreign import ManyToMany
 
         for field_name in fields:
-            rel_attr = getattr(self.model, field_name, None)
-            rel_name = field_name
-            if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                db_col = rel_attr.field_name
-                field = self.model._fields.get(db_col)
-            else:
-                field = self.model._fields.get(field_name)
-                db_col = field_name
-                if not field and field_name.endswith("_id"):
-                    possible_rel = field_name[:-3]
-                    rel_attr = getattr(self.model, possible_rel, None)
-                    if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                        rel_name = possible_rel
-                        db_col = rel_attr.field_name
-                        field = self.model._fields.get(db_col)
+            parts = field_name.split("__")
+            curr_model = self.model
+            curr_table_alias = self.model.table
+            rel_path = []
 
-            if not field or not hasattr(field, "to"):
-                raise ValueError(
-                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
-                )
+            for part in parts:
+                rel_attr = getattr(curr_model, part, None)
+                rel_name = part
+                if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    db_col = rel_attr.field_name
+                    field = curr_model._fields.get(db_col)
+                else:
+                    field = curr_model._fields.get(part)
+                    db_col = part
+                    if not field and part.endswith("_id"):
+                        possible_rel = part[:-3]
+                        rel_attr = getattr(curr_model, possible_rel, None)
+                        if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                            rel_name = possible_rel
+                            db_col = rel_attr.field_name
+                            field = curr_model._fields.get(db_col)
 
-            if isinstance(field, ManyToMany):
-                raise TypeError(
-                    f"'{field_name}' bu ManyToMany! Uning uchun select_related() emas, balki prefetch_related() ishlating."
-                )
+                if not field or not hasattr(field, "to"):
+                    raise ValueError(
+                        f"'{part}' (path '{field_name}') xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
+                    )
 
-            related_table = field.to.table
-            on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
-            if not any(j[1] == related_table for j in qs._join):
-                qs._join.append(("LEFT JOIN", related_table, on_condition))
+                if isinstance(field, ManyToMany):
+                    raise TypeError(
+                        f"'{part}' bu ManyToMany! Uning uchun select_related() emas, balki prefetch_related() ishlating."
+                    )
 
-            if rel_name not in qs._select_related:
-                qs._select_related.append(rel_name)
+                target_model = field.to
+                target_table = target_model.table
+                rel_path.append(rel_name)
+                current_rel_str = "__".join(rel_path)
+
+                join_alias = f"{curr_table_alias}__{rel_name}" if curr_table_alias != self.model.table else target_table
+                join_table_expr = f"{target_table} AS {join_alias}" if join_alias != target_table else target_table
+
+                on_condition = f"{curr_table_alias}.{db_col} = {join_alias}.{target_model.get_pk_name()}"
+                if not any(j[1] == join_table_expr for j in qs._join):
+                    qs._join.append(("LEFT JOIN", join_table_expr, on_condition))
+
+                if current_rel_str not in qs._select_related:
+                    qs._select_related.append(current_rel_str)
+
+                curr_model = target_model
+                curr_table_alias = join_alias
 
         return qs
 
@@ -437,14 +519,14 @@ class QuerySet:
     def values(self, *fields):
         qs = self._clone()
         if fields:
-            qs._columns = ", ".join(fields)
+            qs._columns = qs._build_values_columns(fields)
         qs._return_type = "dict"
         return qs
 
     def values_list(self, *fields, flat=False):
         qs = self._clone()
         if fields:
-            qs._columns = ", ".join(fields)
+            qs._columns = qs._build_values_columns(fields)
         qs._return_type = "list"
         qs._flat = flat
         return qs
@@ -727,28 +809,26 @@ class QuerySet:
         params.update(defaults)
         return self.model.create(**params), True
 
-    def update(self, **kwargs):
+    def update(self, force: bool = False, **kwargs):
         for name, field in self.model._fields.items():
             if getattr(field, "auto_now", False) and name not in kwargs:
                 kwargs[name] = field.get_current_value()
         if not kwargs:
             return 0
         where = self._build_where()
-        if not where or (
-            isinstance(where, Q) and not where.conditions and not where.children
-        ):
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
-                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)"
+                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirish uchun force=True yoki .force() ishlating)"
             )
         return self.model.db.update_where(self.model.table, kwargs, where=where)
 
-    def delete(self):
+    def delete(self, force: bool = False):
         where = self._build_where()
-        if not where or (
-            isinstance(where, Q) and not where.conditions and not where.children
-        ):
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
-                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)"
+                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirish uchun force=True yoki .force() ishlating)"
             )
         return self.model.db.delete_where(self.model.table, where=where)
 
@@ -919,7 +999,15 @@ class AsyncQuerySet:
         qs._prefetch = list(self._prefetch) if self._prefetch else None
         return qs
 
-    async def update(self, **kwargs):
+    def force(self):
+        """
+        Ommaviy update/delete operatsiyalarini shartsiz (barcha qatorlarda) bajarishga ruxsat beradi.
+        """
+        qs = self._clone()
+        qs._force = True
+        return qs
+
+    async def update(self, force: bool = False, **kwargs):
         self.model._check_setup()
 
         if not kwargs:
@@ -938,214 +1026,79 @@ class AsyncQuerySet:
 
         where = self._build_where()
 
-        if not where:
-            raise ValueError("Yangilash uchun shart berilishi kerak")
+        if not where and not (force or getattr(self, "_force", False)):
+            raise ValueError(
+                "Ommaviy update uchun filter sharti kerak! "
+                "(Butun jadvalni yangilash uchun force=True yoki .force() ishlating)"
+            )
 
         return await self.model.db.update_where(self.model.table, kwargs, where)
 
-    async def delete(self):
+    async def delete(self, force: bool = False):
         self.model._check_setup()
 
         where = self._build_where()
 
-        if not where:
-            raise ValueError("O'chirish uchun shart berilishi kerak")
+        if not where and not (force or getattr(self, "_force", False)):
+            raise ValueError(
+                "Ommaviy delete uchun filter sharti kerak! "
+                "(Butun jadvalni o'chirish uchun force=True yoki .force() ishlating)"
+            )
 
         return await self.model.db.delete_where(self.model.table, where)
 
-    def _normalize_q(self, q):
-        if not q:
-            return q
-        from postgresdb3.orm.expressions import Q
-
-        if isinstance(q, Q):
-            if q.conditions:
-                q.conditions = self._process_auto_joins(q.conditions)
-            if q.children:
-                for i, child in enumerate(q.children):
-                    q.children[i] = self._normalize_q(child)
-        return q
-
-    def _process_auto_joins(self, kwargs):
-        new_kwargs = {}
+    def _build_values_columns(self, fields):
+        if not fields:
+            return "*"
+        parsed_fields = []
         from postgresdb3.orm.relations import (
             ForeignKeyRelation,
             AsyncForeignKeyRelation,
         )
-        from postgresdb3.orm.base import BaseModel
 
-        def extract_pk(val):
-            if isinstance(val, BaseModel):
-                return getattr(val, val.get_pk_name())
-            return val
-
-        for key, value in kwargs.items():
-            if isinstance(value, (list, tuple)):
-                value = [extract_pk(v) for v in value]
-            else:
-                value = extract_pk(value)
-
-            parts = key.split("__")
-            field_name = parts[0]
-
-            relation = getattr(self.model, field_name, None)
-            is_fk_relation = relation and isinstance(
-                relation, (ForeignKeyRelation, AsyncForeignKeyRelation)
-            )
-
-            is_fk_comparison = False
-            if is_fk_relation:
-                if len(parts) == 1:
-                    is_fk_comparison = True
-                elif len(parts) == 2:
-                    lookup_ops = {
-                        "eq",
-                        "ne",
-                        "not",
-                        "gt",
-                        "gte",
-                        "lt",
-                        "lte",
-                        "like",
-                        "ilike",
-                        "contains",
-                        "icontains",
-                        "startswith",
-                        "istartswith",
-                        "endswith",
-                        "iendswith",
-                        "in",
-                        "not_in",
-                        "isnull",
-                    }
-                    if parts[1] in lookup_ops:
-                        is_fk_comparison = True
-
-            if is_fk_comparison:
-                parts[0] = relation.field_name
-                key = "__".join(parts)
-
-            elif len(parts) >= 2:
-                if relation and hasattr(relation, "related_model"):
-                    target_table = relation.related_model.table
-                    source_col = getattr(relation, "field_name", field_name)
-                    target_col = relation.related_model.get_pk_name()
-
-                    join_condition = (
-                        f"{self.model.table}.{source_col} = {target_table}.{target_col}"
-                    )
-
+        for field in fields:
+            if "__" in field:
+                parts = field.split("__")
+                rel_name = parts[0]
+                col_name = "__".join(parts[1:])
+                rel_attr = getattr(self.model, rel_name, None)
+                if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    target_model = rel_attr.related_model
+                    target_table = target_model.table
+                    db_col = rel_attr.field_name
+                    on_condition = f"{self.model.table}.{db_col} = {target_table}.{target_model.get_pk_name()}"
                     if not self._join:
                         self._join = []
-
-                    join_exists = any(
-                        j[1] == target_table and j[2] == join_condition
-                        for j in self._join
-                        if isinstance(j, tuple) and len(j) == 3
-                    )
-
-                    if not join_exists:
-                        self._join.append(("INNER JOIN", target_table, join_condition))
-
-                    new_key = f"{target_table}.{'__'.join(parts[1:])}"
-                    new_kwargs[new_key] = value
+                    if not any(j[1] == target_table for j in self._join):
+                        self._join.append(("LEFT JOIN", target_table, on_condition))
+                    parsed_fields.append(f"{target_table}.{col_name} AS \"{field}\"")
                     continue
+            if "." not in field:
+                parsed_fields.append(f"{self.model.table}.{field} AS \"{field}\"")
+            else:
+                parsed_fields.append(field)
 
-            new_kwargs[key] = value
-
-        return new_kwargs
-
-    def filter(self, *args, **kwargs):
-        qs = self._clone()
-
-        if qs._where is None:
-            qs._where = []
-
-        if not isinstance(qs._where, list):
-            qs._where = [qs._where]
-
-        for arg in args:
-            qs._where.append(self._normalize_q(arg))
-
-        if kwargs:
-            qs._where.append(qs._process_auto_joins(kwargs))
-        return qs
-
-    def annotate(self, **kwargs):
-        qs = self._clone()
-        if not hasattr(qs, "_annotations"):
-            qs._annotations = {}
-        qs._annotations.update(kwargs)
-        return qs
-
-    async def paginate(self, page: int = 1, per_page: int = 10):
-        total = await self.count()
-        offset = (page - 1) * per_page
-        data = await self.limit(per_page).offset(offset).all()
-        import math
-
-        return {
-            "data": data,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": math.ceil(total / per_page) if per_page else 1,
-        }
-
-    def exclude(self, *args, **kwargs):
-        qs = self._clone()
-
-        if qs._exclude is None:
-            qs._exclude = []
-
-        if not isinstance(qs._exclude, list):
-            qs._exclude = [qs._exclude]
-
-        for arg in args:
-            qs._exclude.append(self._normalize_q(arg))
-
-        if kwargs:
-            qs._exclude.append(qs._process_auto_joins(kwargs))
-        return qs
-
-    def order_by(self, value):
-        qs = self._clone()
-        qs._order_by = value
-        return qs
-
-    def limit(self, value):
-        qs = self._clone()
-        qs._limit = value
-        return qs
-
-    def offset(self, value):
-        qs = self._clone()
-        qs._offset = value
-        return qs
-
-    def columns(self, value):
-        qs = self._clone()
-        qs._columns = value
-        return qs
-
-    def join(self, table, on_condition, join_type="INNER JOIN"):
-        qs = self._clone()
-        if qs._join is None:
-            qs._join = []
-        qs._join.append((join_type, table, on_condition))
-        return qs
+        return ", ".join(parsed_fields)
 
     def _get_columns_sql(self):
         if self._columns != "*":
             columns = self._columns
         elif self._select_related:
             cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
-            for rel_name in self._select_related:
-                rel_attr = getattr(self.model, rel_name, None)
-                if rel_attr and hasattr(rel_attr, "related_model"):
-                    rmodel = rel_attr.related_model
-                    for rf in rmodel._fields.keys():
-                        cols.append(f"{rmodel.table}.{rf} AS __rel__{rel_name}__{rf}")
+            for rel_str in self._select_related:
+                parts = rel_str.split("__")
+                curr_model = self.model
+                curr_alias = self.model.table
+                for p in parts:
+                    rel_attr = getattr(curr_model, p, None)
+                    if rel_attr and hasattr(rel_attr, "related_model"):
+                        curr_model = rel_attr.related_model
+                        curr_alias = f"{curr_alias}__{p}" if curr_alias != self.model.table else curr_model.table
+                    else:
+                        break
+                if curr_model != self.model:
+                    for rf in curr_model._fields.keys():
+                        cols.append(f"{curr_alias}.{rf} AS __rel__{rel_str}__{rf}")
             columns = ", ".join(cols)
         elif self._join or (hasattr(self, "_annotations") and self._annotations):
             columns = f"{self.model.table}.*"
@@ -1183,18 +1136,30 @@ class AsyncQuerySet:
                 main_data = {k: v for k, v in row.items() if not k.startswith("__rel__")}
                 inst = self.model._from_record(main_data)
 
-                for rel_name in self._select_related:
-                    prefix = f"__rel__{rel_name}__"
+                sorted_rels = sorted(self._select_related, key=lambda x: len(x.split("__")))
+                hydrated_map = {"": inst}
+
+                for rel_str in sorted_rels:
+                    prefix = f"__rel__{rel_str}__"
                     rel_data = {k[len(prefix):]: v for k, v in row.items() if k.startswith(prefix)}
-                    rel_attr = getattr(self.model, rel_name, None)
-                    if rel_attr and hasattr(rel_attr, "related_model"):
-                        rmodel = rel_attr.related_model
-                        pk_col = rmodel.get_pk_name()
-                        if rel_data and rel_data.get(pk_col) is not None:
-                            rel_inst = rmodel._from_record(rel_data)
-                        else:
-                            rel_inst = None
-                        setattr(inst, f"_prefetched_{rel_name}", rel_inst)
+
+                    parts = rel_str.split("__")
+                    parent_path = "__".join(parts[:-1])
+                    current_field = parts[-1]
+
+                    parent_inst = hydrated_map.get(parent_path)
+                    if parent_inst:
+                        rel_attr = getattr(parent_inst.__class__, current_field, None)
+                        if rel_attr and hasattr(rel_attr, "related_model"):
+                            rmodel = rel_attr.related_model
+                            pk_col = rmodel.get_pk_name()
+                            if rel_data and rel_data.get(pk_col) is not None:
+                                rel_inst = rmodel._from_record(rel_data)
+                            else:
+                                rel_inst = None
+                            setattr(parent_inst, f"_prefetched_{current_field}", rel_inst)
+                            if rel_inst:
+                                hydrated_map[rel_str] = rel_inst
             else:
                 inst = self.model._from_record(row)
 
@@ -1205,8 +1170,7 @@ class AsyncQuerySet:
     def select_related(self, *fields):
         """
         N+1 muammosini oldini olish uchun yozilgan asinxron metod.
-        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi.
-        `category` va `category_id` ko'rinishida ham berish mumkin.
+        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi (shuningdek zanjirsimon `category__parent` ham qo'llab-quvvatlanadi).
         """
         qs = self._clone()
         if qs._join is None:
@@ -1221,39 +1185,55 @@ class AsyncQuerySet:
         from .fields.foreign import ManyToMany
 
         for field_name in fields:
-            rel_attr = getattr(self.model, field_name, None)
-            rel_name = field_name
-            if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                db_col = rel_attr.field_name
-                field = self.model._fields.get(db_col)
-            else:
-                field = self.model._fields.get(field_name)
-                db_col = field_name
-                if not field and field_name.endswith("_id"):
-                    possible_rel = field_name[:-3]
-                    rel_attr = getattr(self.model, possible_rel, None)
-                    if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                        rel_name = possible_rel
-                        db_col = rel_attr.field_name
-                        field = self.model._fields.get(db_col)
+            parts = field_name.split("__")
+            curr_model = self.model
+            curr_table_alias = self.model.table
+            rel_path = []
 
-            if not field or not hasattr(field, "to"):
-                raise ValueError(
-                    f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
-                )
+            for part in parts:
+                rel_attr = getattr(curr_model, part, None)
+                rel_name = part
+                if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    db_col = rel_attr.field_name
+                    field = curr_model._fields.get(db_col)
+                else:
+                    field = curr_model._fields.get(part)
+                    db_col = part
+                    if not field and part.endswith("_id"):
+                        possible_rel = part[:-3]
+                        rel_attr = getattr(curr_model, possible_rel, None)
+                        if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                            rel_name = possible_rel
+                            db_col = rel_attr.field_name
+                            field = curr_model._fields.get(db_col)
 
-            if isinstance(field, ManyToMany):
-                raise TypeError(
-                    f"'{field_name}' bu ManyToMany! Uning uchun select_related() emas, balki prefetch_related() ishlating."
-                )
+                if not field or not hasattr(field, "to"):
+                    raise ValueError(
+                        f"'{part}' (path '{field_name}') xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
+                    )
 
-            related_table = field.to.table
-            on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
-            if not any(j[1] == related_table for j in qs._join):
-                qs._join.append(("LEFT JOIN", related_table, on_condition))
+                if isinstance(field, ManyToMany):
+                    raise TypeError(
+                        f"'{part}' bu ManyToMany! Uning uchun select_related() emas, balki prefetch_related() ishlating."
+                    )
 
-            if rel_name not in qs._select_related:
-                qs._select_related.append(rel_name)
+                target_model = field.to
+                target_table = target_model.table
+                rel_path.append(rel_name)
+                current_rel_str = "__".join(rel_path)
+
+                join_alias = f"{curr_table_alias}__{rel_name}" if curr_table_alias != self.model.table else target_table
+                join_table_expr = f"{target_table} AS {join_alias}" if join_alias != target_table else target_table
+
+                on_condition = f"{curr_table_alias}.{db_col} = {join_alias}.{target_model.get_pk_name()}"
+                if not any(j[1] == join_table_expr for j in qs._join):
+                    qs._join.append(("LEFT JOIN", join_table_expr, on_condition))
+
+                if current_rel_str not in qs._select_related:
+                    qs._select_related.append(current_rel_str)
+
+                curr_model = target_model
+                curr_table_alias = join_alias
 
         return qs
 
@@ -1265,19 +1245,18 @@ class AsyncQuerySet:
     def values(self, *fields):
         qs = self._clone()
         if fields:
-            qs._columns = ", ".join(fields)
+            qs._columns = qs._build_values_columns(fields)
         qs._return_type = "dict"
         return qs
 
     def values_list(self, *fields, flat=False):
         qs = self._clone()
         if fields:
-            qs._columns = ", ".join(fields)
+            qs._columns = qs._build_values_columns(fields)
         qs._return_type = "list"
         qs._flat = flat
         return qs
 
-    def only(self, *fields):
         """
         Faqat ko'rsatilgan ustunlarni yuklaydi (Asinxron). Model obyektlari qaytariladi.
         """
@@ -1430,28 +1409,26 @@ class AsyncQuerySet:
         params.update(defaults)
         return await self.model.create(**params), True
 
-    async def update(self, **kwargs):
+    async def update(self, force: bool = False, **kwargs):
         for name, field in self.model._fields.items():
             if getattr(field, "auto_now", False) and name not in kwargs:
                 kwargs[name] = field.get_current_value()
         if not kwargs:
             return 0
         where = self._build_where()
-        if not where or (
-            isinstance(where, Q) and not where.conditions and not where.children
-        ):
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
-                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirishdan himoya)"
+                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirish uchun force=True yoki .force() ishlating)"
             )
         return await self.model.db.update_where(self.model.table, kwargs, where=where)
 
-    async def delete(self):
+    async def delete(self, force: bool = False):
         where = self._build_where()
-        if not where or (
-            isinstance(where, Q) and not where.conditions and not where.children
-        ):
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
-                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirishdan himoya)"
+                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirish uchun force=True yoki .force() ishlating)"
             )
         return await self.model.db.delete_where(self.model.table, where=where)
 
