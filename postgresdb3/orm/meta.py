@@ -1,3 +1,4 @@
+import re
 from .fields import Field, ForeignKey, OneToOne, ManyToMany
 from .indexes import Index
 from .relations import (
@@ -7,8 +8,206 @@ from .relations import (
     AsyncReverseRelation,
     ManyToManyRelation,
 )
+from . import registry as _registry_module
 
 model_registry = []
+
+
+# Invariant (birlik va ko'plik bir xil) yoki allaqachon birlik bo'lgan jadval nomlari
+_SINGULARIZE_EXCEPTIONS = frozenset({
+    "series", "species", "news", "means", "offspring",
+    "information", "data", "media", "agenda", "criteria",
+})
+
+
+def _singularize(table_name: str) -> str:
+    """
+    Ko'plik jadval nomini birlik shaklga o'tkazadi — M2M ustun nomi uchun.
+
+    Misollar:
+        test_posts   → test_post
+        categories   → category
+        statuses     → status      (ko'plik)
+        status       → status      (allaqachon birlik — us qo'shimchasi)
+        analysis     → analysis    (allaqachon birlik — is qo'shimchasi)
+        news         → news        (invariant)
+        series       → series      (invariant)
+        boxes        → box
+        matches      → match
+    """
+    # 1. To'liq istisno so'zlar
+    if table_name in _SINGULARIZE_EXCEPTIONS:
+        return table_name
+
+    # 2. Compound jadval nomining oxirgi qismini tekshirish (test_series → series)
+    last_part = table_name.rsplit("_", 1)[-1]
+    if last_part in _SINGULARIZE_EXCEPTIONS:
+        return table_name
+
+    # 3. Ko'plik qoidalari
+    if table_name.endswith("ies"):
+        # categories → category, countries → country
+        # LEKIN: series → "sery" noto'g'ri — yuqorida ushlanadi
+        return table_name[:-3] + "y"
+    elif table_name.endswith(("ses", "xes", "zes", "ches", "shes")):
+        # statuses → status, boxes → box, matches → match
+        return table_name[:-2]
+    elif (
+        table_name.endswith("s")
+        and not table_name.endswith(("ss", "us", "is", "ews", "ous", "ias"))
+    ):
+        # posts → post, authors → author
+        # LEKIN: status(us), analysis(is), news(ews), bonus(us) — saqlanadi
+        return table_name[:-1]
+
+    # 4. O'zgarmaydi
+    return table_name
+
+
+
+def _to_table_name(class_name: str) -> str:
+    """
+    Model sinf nomini jadval nomiga o'tkazadi (CamelCase → snake_case).
+    Ko'plik qo'shimchasi qo'shilmaydi — har qanday tilda ishlaydi.
+
+    Misollar:
+        Post        → post
+        UserProfile → user_profile
+        Category    → category
+        Mahsulot    → mahsulot        (o'zbekcha)
+        Kategoriya  → kategoriya      (o'zbekcha)
+    """
+    # CamelCase → snake_case: UserProfile → user_profile
+    s = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', class_name)
+    return s.lower()
+
+
+def _setup_fk_relation(cls, field_name, field, is_async_model, name):
+    """
+    ForeignKey / OneToOne uchun forward + reverse relation descriptor'larini
+    modelga bog'laydi. 'field.to' tayyor klass bo'lishi shart.
+    """
+    to_model = field.to  # LookupError ko'tarishi mumkin — qo'yib beramiz
+
+    relation_name = (
+        field_name[:-3] if field_name.endswith("_id") else field_name
+    )
+
+    if not hasattr(cls, relation_name):
+        if is_async_model:
+            setattr(
+                cls,
+                relation_name,
+                AsyncForeignKeyRelation(field_name, to_model, field.to_field),
+            )
+        else:
+            setattr(
+                cls,
+                relation_name,
+                ForeignKeyRelation(field_name, to_model, field.to_field),
+            )
+
+    is_o2o = isinstance(field, OneToOne)
+    related_name = field.related_name or (
+        name.lower() if is_o2o else f"{name.lower()}_set"
+    )
+
+    # Lazy resolve holatida descriptor allaqachon o'rnatilgan bo'lishi mumkin
+    existing_attr = getattr(to_model, related_name, None)
+    is_already_reverse = isinstance(
+        existing_attr, (ReverseRelation, AsyncReverseRelation)
+    )
+    if existing_attr is not None and not is_already_reverse:
+        raise ValueError(
+            f"'{to_model.__name__}.{related_name}' nomida ziddiyat bor. "
+            f"'{name}.{field_name}' maydoniga boshqa 'related_name' bering."
+        )
+
+    if not is_already_reverse:
+        if is_async_model:
+            setattr(
+                to_model,
+                related_name,
+                AsyncReverseRelation(cls, field_name, is_o2o),
+            )
+        else:
+            setattr(
+                to_model, related_name, ReverseRelation(cls, field_name, is_o2o)
+            )
+
+
+def _setup_m2m_relation(cls, field_name, field, is_async_model, name, bases):
+    """
+    ManyToMany uchun through jadval + relation descriptor'larini ulaydi.
+    'field.to' tayyor klass bo'lishi shart.
+    """
+    to_model = field.to  # LookupError ko'tarishi mumkin
+
+    through_table = f"{cls.table}_{to_model.table}"
+    # Ustun nomlari jadval nomidan olinadi (sinf nomidan emas) — izchillik uchun.
+    # test_posts → test_post_id, categories → category_id, authors → author_id
+    source_col = f"{_singularize(cls.table)}_id"
+    target_col = f"{_singularize(to_model.table)}_id"
+
+    setattr(
+        cls,
+        field_name,
+        ManyToManyRelation(
+            to_model, through_table, source_col, target_col, is_async_model
+        ),
+    )
+
+    related_name = field.related_name or f"{name.lower()}_set"
+
+    # Agar bu lazy resolve bo'lsa (string) — descriptor allaqachon o'rnatilgan bo'lishi mumkin
+    existing = getattr(to_model, related_name, None)
+    if existing is not None and not isinstance(existing, ManyToManyRelation):
+        raise ValueError(
+            f"'{to_model.__name__}.{related_name}' nomida ziddiyat bor. "
+            f"'{name}.{field_name}' maydoniga boshqa 'related_name' bering."
+        )
+
+    if not isinstance(existing, ManyToManyRelation):
+        setattr(
+            to_model,
+            related_name,
+            ManyToManyRelation(
+                cls, through_table, target_col, source_col, is_async_model
+            ),
+        )
+
+    source_fk = ForeignKey(cls)
+    source_fk.name = source_col
+    target_fk = ForeignKey(to_model)
+    target_fk.name = target_col
+    attrs_dict = {
+        "table": through_table,
+        source_col: source_fk,
+        target_col: target_fk,
+        "is_through_table": True,
+    }
+
+    if not hasattr(cls, "_m2m_throughs"):
+        cls._m2m_throughs = []
+
+    # Rekursiyani oldini olish: Through jadval yaratish paytida
+    # ModelMeta.__new__ -> resolve_pending -> bu callback qayta chaqirilmasligi uchun
+    _registry_module._in_m2m_setup = True
+    try:
+        M2MThrough = type(
+            f"{cls.__name__}{to_model.__name__}Through",
+            (bases[0] if bases else object,),
+            attrs_dict,
+        )
+    finally:
+        _registry_module._in_m2m_setup = False
+
+    M2MThrough.get_pk_name = classmethod(lambda c: "id")
+    cls._m2m_throughs.append(M2MThrough)
+
+    # Through jadvalini ham global registry'ga qo'shish
+    if M2MThrough not in model_registry:
+        model_registry.append(M2MThrough)
 
 
 class ModelMeta(type):
@@ -93,13 +292,13 @@ class ModelMeta(type):
         meta_options.setdefault("abstract", False)
         meta_options.setdefault("verbose_name", name.lower())
         meta_options.setdefault(
-            "verbose_name_plural", meta_options["verbose_name"] + "s"
+            "verbose_name_plural", meta_options["verbose_name"]
         )
 
         attrs["_meta_options"] = meta_options
 
         if not attrs.get("table"):
-            attrs["table"] = name.lower() + "s"
+            attrs["table"] = _to_table_name(name)
 
         pk_names = [
             fname for fname, f in fields.items() if getattr(f, "primary_key", False)
@@ -123,102 +322,50 @@ class ModelMeta(type):
 
         cls = super().__new__(mcls, name, bases, attrs)
 
+        # --- Model registry'ga qo'shish ---
+        _registry_module.register(cls)
+
         is_async_model = any(base.__name__ == "AsyncModel" for base in bases)
 
         for field_name, field in fields.items():
             if isinstance(field, ForeignKey) and not isinstance(field, ManyToMany):
-                relation_name = (
-                    field_name[:-3] if field_name.endswith("_id") else field_name
-                )
+                # String reference bo'lsa — lazy yechish
+                if not field.is_resolved():
+                    _original_ref = field._to_ref
 
-                if not hasattr(cls, relation_name):
-                    if is_async_model:
-                        setattr(
-                            cls,
-                            relation_name,
-                            AsyncForeignKeyRelation(
-                                field_name, field.to, field.to_field
-                            ),
-                        )
-                    else:
-                        setattr(
-                            cls,
-                            relation_name,
-                            ForeignKeyRelation(field_name, field.to, field.to_field),
-                        )
+                    def _make_fk_callback(_field_name, _field, _cls, _is_async, _name, _bases):
+                        def _callback(resolved_model):
+                            _setup_fk_relation(_cls, _field_name, _field, _is_async, _name)
+                        return _callback
 
-                is_o2o = isinstance(field, OneToOne)
-                related_name = field.related_name or (
-                    name.lower() if is_o2o else f"{name.lower()}_set"
-                )
-
-                if hasattr(field.to, related_name):
-                    raise ValueError(
-                        f"'{field.to.__name__}.{related_name}' nomida ziddiyat bor. "
-                        f"'{name}.{field_name}' maydoniga boshqa 'related_name' bering."
-                    )
-
-                if is_async_model:
-                    setattr(
-                        field.to,
-                        related_name,
-                        AsyncReverseRelation(cls, field_name, is_o2o),
+                    _registry_module.add_pending(
+                        field,
+                        cls,
+                        _make_fk_callback(field_name, field, cls, is_async_model, name, bases),
                     )
                 else:
-                    setattr(
-                        field.to, related_name, ReverseRelation(cls, field_name, is_o2o)
-                    )
+                    # Klass bevosita berilgan — darhol sozlash
+                    _setup_fk_relation(cls, field_name, field, is_async_model, name)
 
             elif isinstance(field, ManyToMany):
-                through_table = f"{cls.table}_{field.to.table}"
-                source_col = f"{name.lower()}_id"
-                target_col = f"{field.to.__name__.lower()}_id"
+                # String reference bo'lsa — lazy yechish
+                if not field.is_resolved():
+                    def _make_m2m_callback(_field_name, _field, _cls, _is_async, _name, _bases):
+                        def _callback(resolved_model):
+                            _setup_m2m_relation(_cls, _field_name, _field, _is_async, _name, _bases)
+                        return _callback
 
-                setattr(
-                    cls,
-                    field_name,
-                    ManyToManyRelation(
-                        field.to, through_table, source_col, target_col, is_async_model
-                    ),
-                )
-
-                related_name = field.related_name or f"{name.lower()}_set"
-
-                if hasattr(field.to, related_name):
-                    raise ValueError(
-                        f"'{field.to.__name__}.{related_name}' nomida ziddiyat bor. "
-                        f"'{name}.{field_name}' maydoniga boshqa 'related_name' bering."
+                    _registry_module.add_pending(
+                        field,
+                        cls,
+                        _make_m2m_callback(field_name, field, cls, is_async_model, name, bases),
                     )
+                else:
+                    # Klass bevosita berilgan — darhol sozlash
+                    _setup_m2m_relation(cls, field_name, field, is_async_model, name, bases)
 
-                setattr(
-                    field.to,
-                    related_name,
-                    ManyToManyRelation(
-                        cls, through_table, target_col, source_col, is_async_model
-                    ),
-                )
-
-                source_fk = ForeignKey(cls)
-                source_fk.name = source_col
-                target_fk = ForeignKey(field.to)
-                target_fk.name = target_col
-                attrs_dict = {
-                    "table": through_table,
-                    source_col: source_fk,
-                    target_col: target_fk,
-                    "is_through_table": True,
-                }
-
-                if not hasattr(cls, "_m2m_throughs"):
-                    cls._m2m_throughs = []
-
-                M2MThrough = type(
-                    f"{cls.__name__}{field.to.__name__}Through",
-                    (bases[0] if bases else object,),
-                    attrs_dict,
-                )
-                M2MThrough.get_pk_name = classmethod(lambda cls: "id")
-                cls._m2m_throughs.append(M2MThrough)
+        # Har yangi model qo'shilganda pending'larni resolve qilishga urinish
+        _registry_module.resolve_pending()
 
         is_abstract = attrs.get("_meta_options", {}).get("abstract", False)
         if (

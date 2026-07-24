@@ -12,10 +12,54 @@ class ForeignKey(Field):
         self, to, to_field=None, related_name=None, on_delete=CASCADE, **kwargs
     ):
         super().__init__(**kwargs)
-        self.to = to
+
+        if isinstance(to, str):
+            self._to_ref = to
+            self._resolved_to = None
+        else:
+            self._to_ref = None
+            self._resolved_to = to
+
         self.to_field = to_field
         self.related_name = related_name
         self.on_delete = on_delete
+
+    @property
+    def to(self):
+        """
+        Bog'langan model klassini qaytaradi.
+        Agar hali string holatida bo'lsa, registry'dan topishga urinadi.
+        """
+        if self._resolved_to is not None:
+            return self._resolved_to
+
+        if self._to_ref is not None:
+            from . import registry
+            resolved = registry.resolve(self._to_ref)
+            if resolved is not None:
+                self._resolved_to = resolved
+                return resolved
+            raise LookupError(
+                f"ForeignKey('{self._to_ref}') — bu nomdagi model hali "
+                f"ro'yxatga olinmagan yoki import qilinmagan.\n"
+                f"Maslahat: shu model faylini import qilib qo'ying, "
+                f"yoki resolve_all() ni chaqiring."
+            )
+        return None
+
+    @to.setter
+    def to(self, value):
+        """Bevosita o'rnatish imkonini beradi (orqaga moslik uchun)."""
+        if isinstance(value, str):
+            self._to_ref = value
+            self._resolved_to = None
+        else:
+            self._to_ref = None
+            self._resolved_to = value
+
+    def is_resolved(self) -> bool:
+        """True bo'lsa — model allaqachon resolve bo'lgan."""
+        return self._resolved_to is not None
 
     @property
     def sql_type(self):
@@ -60,9 +104,52 @@ class ManyToMany(Field):
 
     def __init__(self, to, related_name=None, verbose_name=None):
         super().__init__(verbose_name=verbose_name)
-        self.to = to
+        # 'to' string yoki klass bo'lishi mumkin
+        if isinstance(to, str):
+            self._to_ref = to
+            self._resolved_to = None
+        else:
+            self._to_ref = None
+            self._resolved_to = to
+
         self.related_name = related_name
         self.through = None
+
+    @property
+    def to(self):
+        """
+        Bog'langan model klassini qaytaradi.
+        Agar hali string holatida bo'lsa, registry'dan topishga urinadi.
+        """
+        if self._resolved_to is not None:
+            return self._resolved_to
+
+        if self._to_ref is not None:
+            from . import registry
+            resolved = registry.resolve(self._to_ref)
+            if resolved is not None:
+                self._resolved_to = resolved
+                return resolved
+            raise LookupError(
+                f"ManyToMany('{self._to_ref}') — bu nomdagi model hali "
+                f"ro'yxatga olinmagan yoki import qilinmagan.\n"
+                f"Maslahat: shu model faylini import qilib qo'ying."
+            )
+        return None
+
+    @to.setter
+    def to(self, value):
+        """Bevosita o'rnatish imkonini beradi (orqaga moslik uchun)."""
+        if isinstance(value, str):
+            self._to_ref = value
+            self._resolved_to = None
+        else:
+            self._to_ref = None
+            self._resolved_to = value
+
+    def is_resolved(self) -> bool:
+        """True bo'lsa — model allaqachon resolve bo'lgan."""
+        return self._resolved_to is not None
 
     @property
     def sql_type(self):

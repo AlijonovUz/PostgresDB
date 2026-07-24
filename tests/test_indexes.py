@@ -79,10 +79,10 @@ class IndexTestCase(unittest.TestCase):
 
         engine = MigrationEngine(migrations_dir="tmp_migrations")
         state = engine._get_current_state()
-        self.assertIn("articles", state)
-        self.assertIn("indexes", state["articles"]["meta_options"])
+        self.assertIn("article", state)
+        self.assertIn("indexes", state["article"]["meta_options"])
 
-        indexes_state = state["articles"]["meta_options"]["indexes"]
+        indexes_state = state["article"]["meta_options"]["indexes"]
         self.assertEqual(len(indexes_state), 2)
         self.assertEqual(indexes_state[0]["unique"], True)
         self.assertEqual(indexes_state[1]["condition"], "status = 'published'")

@@ -203,15 +203,48 @@ articles = Article.query().defer("body", "payload").all()
 
 ---
 
-## 9. Aloqalar bilan ishlash (Relationships)
+## 9. Aloqalar bilan ishlash (Relationships & String References)
+
+`postgresdb3` ORM munosabatlar (`ForeignKey`, `OneToOne`, `ManyToMany`) uchun string shaklida model nomini berishni (`to="ModelName"`) to'liq qo'llab-quvvatlaydi. Bu orqali alohida fayllarda joylashgan modellar o'rtasidagi **Circular Import** muammolarining oldi olinadi.
+
+Jadvallar nomlanishi avtomatik tarzda `CamelCase` -> `snake_case` ko'rinishida belgilanadi (masalan, `UserProfile` -> `user_profile`, `Category` -> `category`).
 
 ```python
-class Post(Model):
-    title = fields.String(length=100)
-    author = fields.ForeignKey(User, related_name="posts", on_delete=fields.CASCADE)
+# models/author.py
+from postgresdb3.orm import Model, fields
 
-user = User.first(id=1)
-user_posts = user.posts.all()
+class Author(Model):
+    name = fields.String(length=100)
+    # Author modelida profile va posts munosabatlari avtomatik dynamic resolve bo'ladi
+
+# models/post.py (Author yoki Tag modelini bevosita import qilish SHART EMAS)
+from postgresdb3.orm import Model, fields
+
+class Post(Model):
+    title = fields.String(length=200)
+    # String reference - Circular import bo'lmaydi:
+    author = fields.ForeignKey("Author", related_name="posts", on_delete=fields.CASCADE)
+    tags = fields.ManyToMany("Tag", related_name="posts")
+
+# models/profile.py
+class Profile(Model):
+    bio = fields.Text()
+    author = fields.OneToOne("Author", related_name="profile", on_delete=fields.CASCADE)
+```
+
+**Munosabatlardan foydalanish:**
+```python
+# Forward va Reverse munosabatlarni chaqirish:
+post = Post.first(id=1)
+author = post.author              # Post muallifini olish
+
+author_posts = author.posts.all()  # Muallifning barcha postlarini olish
+author_profile = author.profile   # OneToOne profile obyektini olish
+
+# ManyToMany bilan ishlash:
+post.tags.add(tag1, tag2)         # Tag qo'shish
+post_tags = post.tags.all()       # Post taglarini olish
+post.tags.remove(tag1)            # Tag o'chirish
 ```
 
 ---
