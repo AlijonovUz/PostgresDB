@@ -1,4 +1,6 @@
 from __future__ import annotations
+import re
+import time
 from dataclasses import dataclass
 from typing import TypeVar, Generic, Any, Optional, List, Tuple, Dict, Union
 from postgresdb3.orm.expressions import Q
@@ -93,45 +95,64 @@ class QuerySet:
         qs._force = True
         return qs
 
+    def get(self, *args, **kwargs):
+        """
+        Kiritilgan shartlar bo'yicha aynan 1 ta obyektni qaytaradi.
+        Agar obyekt topilmasa yoki 1 tadan ko'p topilsa, xatolik beradi.
+        """
+        qs = self.filter(*args, **kwargs).limit(2)
+        res = qs.all()
+
+        if not res:
+            raise Exception(f"{self.model.__name__} obyekti topilmadi (DoesNotExist).")
+        if len(res) > 1:
+            raise Exception(
+                f"Aynan bitta {self.model.__name__} kutilgan edi, lekin bir nechtasi topildi (MultipleObjectsReturned).")
+
+        return res[0]
+
     def update(self, force: bool = False, **kwargs):
         self.model._check_setup()
+
+        for name, field in self.model._fields.items():
+            if getattr(field, "auto_now", False) and name not in kwargs:
+                kwargs[name] = field.get_current_value()
 
         if not kwargs:
             raise ValueError("Yangilash uchun kamida bitta ustun kerak")
 
         pk_name = self.model.get_pk_name()
-
         for key in kwargs:
             if key not in self.model._fields:
                 raise ValueError(
                     f"{self.model.__name__} modelida '{key}' degan ustun yo'q"
                 )
-
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
 
         where = self._build_where()
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
 
-        if not where and not (force or getattr(self, "_force", False)):
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
                 "Ommaviy update uchun filter sharti kerak! "
                 "(Butun jadvalni yangilash uchun force=True yoki .force() ishlating)"
             )
 
-        return self.model.db.update_where(self.model.table, kwargs, where)
+        return self.model.db.update_where(self.model.table, kwargs, where=where)
 
     def delete(self, force: bool = False):
         self.model._check_setup()
-
         where = self._build_where()
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
 
-        if not where and not (force or getattr(self, "_force", False)):
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
                 "Ommaviy delete uchun filter sharti kerak! "
                 "(Butun jadvalni o'chirish uchun force=True yoki .force() ishlating)"
             )
 
-        return self.model.db.delete_where(self.model.table, where)
+        return self.model.db.delete_where(self.model.table, where=where)
 
     def join(self, table, on_condition, join_type="INNER JOIN"):
         qs = self._clone()
@@ -263,7 +284,8 @@ class QuerySet:
                     parent_path = "__".join(parts[:-1])
                     parent_inst = hydrated_map.get(parent_path)
                     current_field = parts[-1]
-                    if parent_inst and current_field.endswith("_id") and hasattr(parent_inst.__class__, current_field[:-3]):
+                    if parent_inst and current_field.endswith("_id") and hasattr(parent_inst.__class__,
+                                                                                 current_field[:-3]):
                         current_field = current_field[:-3]
 
                     if parent_inst:
@@ -286,10 +308,6 @@ class QuerySet:
         return instances
 
     def select_related(self, *fields):
-        """
-        N+1 muammosini oldini olish uchun yozilgan metod.
-        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi (shuningdek zanjirsimon `category__parent` ham qo'llab-quvvatlanadi).
-        """
         qs = self._clone()
         if qs._join is None:
             qs._join = []
@@ -359,20 +377,12 @@ class QuerySet:
         return qs
 
     def prefetch_related(self, *fields):
-        """
-        Ko'pga-ko'p (ManyToMany) va Birga-ko'p (OneToMany) bog'lanishlar uchun N+1 muammosini oldini olish.
-        Ushbu metod ma'lumotlarni alohida so'rovlar orqali olib, xotirada bog'lab qo'yadi.
-        `category` va `category_id` ko'rinishida ham berish mumkin.
-        """
         qs = self._clone()
         if qs._prefetch is None:
             qs._prefetch = []
 
         normalized_fields = []
-        from postgresdb3.orm.relations import (
-            ForeignKeyRelation,
-            AsyncForeignKeyRelation,
-        )
+
         for field_name in fields:
             if field_name.endswith("_id") and not hasattr(self.model, field_name):
                 possible_rel = field_name[:-3]
@@ -384,10 +394,6 @@ class QuerySet:
         return qs
 
     def select_for_update(self):
-        """
-        Joriy tranzaksiya doirasida tanlangan qatorlarni qulflash (lock) uchun.
-        Pessimistic locking (balans yangilash va sh.k. poyga holatlarining oldini olish uchun).
-        """
         qs = self._clone()
         qs._select_for_update = True
         return qs
@@ -438,24 +444,9 @@ class QuerySet:
                     is_fk_comparison = True
                 elif len(parts) == 2:
                     lookup_ops = {
-                        "eq",
-                        "ne",
-                        "not",
-                        "gt",
-                        "gte",
-                        "lt",
-                        "lte",
-                        "like",
-                        "ilike",
-                        "contains",
-                        "icontains",
-                        "startswith",
-                        "istartswith",
-                        "endswith",
-                        "iendswith",
-                        "in",
-                        "not_in",
-                        "isnull",
+                        "eq", "ne", "not", "gt", "gte", "lt", "lte", "like",
+                        "ilike", "contains", "icontains", "startswith",
+                        "istartswith", "endswith", "iendswith", "in", "not_in", "isnull",
                     }
                     if parts[1] in lookup_ops:
                         is_fk_comparison = True
@@ -573,9 +564,6 @@ class QuerySet:
         return qs
 
     def only(self, *fields):
-        """
-        Faqat ko'rsatilgan ustunlarni yuklaydi. Model obyektlari qaytariladi.
-        """
         qs = self._clone()
         if not fields:
             return qs
@@ -598,9 +586,6 @@ class QuerySet:
         return qs
 
     def defer(self, *fields):
-        """
-        Ko'rsatilgan ustunlardan tashqari barcha ustunlarni yuklaydi.
-        """
         qs = self._clone()
         if not fields:
             return qs
@@ -618,8 +603,6 @@ class QuerySet:
         return qs
 
     def all(self):
-        import time
-
         cache_key = None
         if getattr(self, "_cache_ttl", None) is not None:
             cache_key = (
@@ -754,14 +737,15 @@ class QuerySet:
                 elif isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation)):
                     related_model = relation.related_model
                     fk_col = relation.field_name
-                    fk_vals = list({getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
+                    fk_vals = list(
+                        {getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
                     if fk_vals:
                         to_field = relation.to_field
                         related_instances = related_model.filter(**{f"{to_field}__in": fk_vals}).all()
                         related_map = {getattr(r, to_field): r for r in related_instances}
                         for inst in instances:
                             fk_val = getattr(inst, fk_col, None)
-                            if fk_val in related_map:
+                            if fk_val in related_map:            # SQL injection ni oldini olish (oddiy yechim)
                                 setattr(inst, f"_prefetched_{field_name}", related_map[fk_val])
 
         return instances
@@ -850,29 +834,6 @@ class QuerySet:
         params.update(defaults)
         return self.model.create(**params), True
 
-    def update(self, force: bool = False, **kwargs):
-        for name, field in self.model._fields.items():
-            if getattr(field, "auto_now", False) and name not in kwargs:
-                kwargs[name] = field.get_current_value()
-        if not kwargs:
-            return 0
-        where = self._build_where()
-        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
-        if not has_where and not (force or getattr(self, "_force", False)):
-            raise ValueError(
-                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirish uchun force=True yoki .force() ishlating)"
-            )
-        return self.model.db.update_where(self.model.table, kwargs, where=where)
-
-    def delete(self, force: bool = False):
-        where = self._build_where()
-        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
-        if not has_where and not (force or getattr(self, "_force", False)):
-            raise ValueError(
-                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirish uchun force=True yoki .force() ishlating)"
-            )
-        return self.model.db.delete_where(self.model.table, where=where)
-
     def count(self):
         where = self._build_where()
         record = self.model.db.select(
@@ -947,6 +908,9 @@ class QuerySet:
                 col = item.strip()
                 direction = "ASC"
 
+            if not re.match(r'^[a-zA-Z0-9_.]+$', col):
+                raise ValueError(f"Yaroqsiz tartiblash ustuni (SQL ineksiya xavfi): {col}")
+
             if "." not in col:
                 col = f"{self.model.table}.{col}"
 
@@ -997,6 +961,10 @@ class QuerySet:
 
         return final_q if (final_q.conditions or final_q.children) else None
 
+    def __iter__(self):
+        """QuerySet ni to'g'ridan-to'g'ri for sikliga qo'yish imkonini beradi."""
+        return iter(self.all())
+
 
 class AsyncQuerySet:
     def __init__(self, model):
@@ -1010,6 +978,7 @@ class AsyncQuerySet:
         self._join = None
         self._group_by = None
         self._select_for_update = False
+        self._cache_ttl = None
         self._select_related = None
         self._prefetch = None
 
@@ -1036,8 +1005,17 @@ class AsyncQuerySet:
         qs._join = list(self._join) if self._join else None
         qs._group_by = self._group_by
         qs._select_for_update = self._select_for_update
+        qs._cache_ttl = self._cache_ttl
         qs._select_related = list(self._select_related) if self._select_related else None
         qs._prefetch = list(self._prefetch) if self._prefetch else None
+        return qs
+
+    def cache(self, ttl: float = 60.0):
+        """
+        So'rov natijasini ko'rsatilgan soniya (ttl) davomida keshda saqlaydi.
+        """
+        qs = self._clone()
+        qs._cache_ttl = ttl
         return qs
 
     def force(self):
@@ -1048,45 +1026,64 @@ class AsyncQuerySet:
         qs._force = True
         return qs
 
+    async def get(self, *args, **kwargs):
+        """
+        Kiritilgan shartlar bo'yicha aynan 1 ta obyektni qaytaradi.
+        Agar obyekt topilmasa yoki 1 tadan ko'p topilsa, xatolik beradi.
+        """
+        qs = self.filter(*args, **kwargs).limit(2)
+        res = await qs.all()
+
+        if not res:
+            raise Exception(f"{self.model.__name__} obyekti topilmadi (DoesNotExist).")
+        if len(res) > 1:
+            raise Exception(
+                f"Aynan bitta {self.model.__name__} kutilgan edi, lekin bir nechtasi topildi (MultipleObjectsReturned).")
+
+        return res[0]
+
     async def update(self, force: bool = False, **kwargs):
         self.model._check_setup()
+
+        for name, field in self.model._fields.items():
+            if getattr(field, "auto_now", False) and name not in kwargs:
+                kwargs[name] = field.get_current_value()
 
         if not kwargs:
             raise ValueError("Yangilash uchun kamida bitta ustun kerak")
 
         pk_name = self.model.get_pk_name()
-
         for key in kwargs:
             if key not in self.model._fields:
                 raise ValueError(
                     f"{self.model.__name__} modelida '{key}' degan ustun yo'q"
                 )
-
             if key == pk_name:
                 raise ValueError(f"{pk_name} ustunini yangilab bo'lmaydi")
 
         where = self._build_where()
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
 
-        if not where and not (force or getattr(self, "_force", False)):
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
                 "Ommaviy update uchun filter sharti kerak! "
                 "(Butun jadvalni yangilash uchun force=True yoki .force() ishlating)"
             )
 
-        return await self.model.db.update_where(self.model.table, kwargs, where)
+        return await self.model.db.update_where(self.model.table, kwargs, where=where)
 
     async def delete(self, force: bool = False):
         self.model._check_setup()
-
         where = self._build_where()
+        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
 
-        if not where and not (force or getattr(self, "_force", False)):
+        if not has_where and not (force or getattr(self, "_force", False)):
             raise ValueError(
                 "Ommaviy delete uchun filter sharti kerak! "
                 "(Butun jadvalni o'chirish uchun force=True yoki .force() ishlating)"
             )
 
-        return await self.model.db.delete_where(self.model.table, where)
+        return await self.model.db.delete_where(self.model.table, where=where)
 
     def _build_values_columns(self, fields):
         if not fields:
@@ -1211,7 +1208,8 @@ class AsyncQuerySet:
                     parent_path = "__".join(parts[:-1])
                     parent_inst = hydrated_map.get(parent_path)
                     current_field = parts[-1]
-                    if parent_inst and current_field.endswith("_id") and hasattr(parent_inst.__class__, current_field[:-3]):
+                    if parent_inst and current_field.endswith("_id") and hasattr(parent_inst.__class__,
+                                                                                 current_field[:-3]):
                         current_field = current_field[:-3]
 
                     if parent_inst:
@@ -1257,7 +1255,7 @@ class AsyncQuerySet:
                     target_col = relation.target_col
 
                     placeholders = ", ".join(
-                        [f"${i+1}" for i in range(len(instance_pks))]
+                        [f"${i + 1}" for i in range(len(instance_pks))]
                     )
                     sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
 
@@ -1310,7 +1308,8 @@ class AsyncQuerySet:
                 elif isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation)):
                     related_model = relation.related_model
                     fk_col = relation.field_name
-                    fk_vals = list({getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
+                    fk_vals = list(
+                        {getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
                     if fk_vals:
                         to_field = relation.to_field
                         related_instances = await related_model.filter(**{f"{to_field}__in": fk_vals}).all()
@@ -1323,10 +1322,6 @@ class AsyncQuerySet:
         return instances
 
     def select_related(self, *fields):
-        """
-        N+1 muammosini oldini olish uchun yozilgan asinxron metod.
-        Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi (shuningdek zanjirsimon `category__parent` ham qo'llab-quvvatlanadi).
-        """
         qs = self._clone()
         if qs._join is None:
             qs._join = []
@@ -1441,24 +1436,9 @@ class AsyncQuerySet:
                     is_fk_comparison = True
                 elif len(parts) == 2:
                     lookup_ops = {
-                        "eq",
-                        "ne",
-                        "not",
-                        "gt",
-                        "gte",
-                        "lt",
-                        "lte",
-                        "like",
-                        "ilike",
-                        "contains",
-                        "icontains",
-                        "startswith",
-                        "istartswith",
-                        "endswith",
-                        "iendswith",
-                        "in",
-                        "not_in",
-                        "isnull",
+                        "eq", "ne", "not", "gt", "gte", "lt", "lte", "like",
+                        "ilike", "contains", "icontains", "startswith",
+                        "istartswith", "endswith", "iendswith", "in", "not_in", "isnull",
                     }
                     if parts[1] in lookup_ops:
                         is_fk_comparison = True
@@ -1576,9 +1556,6 @@ class AsyncQuerySet:
         return qs
 
     def only(self, *fields):
-        """
-        Faqat ko'rsatilgan ustunlarni yuklaydi (Asinxron). Model obyektlari qaytariladi.
-        """
         qs = self._clone()
         if not fields:
             return qs
@@ -1601,9 +1578,6 @@ class AsyncQuerySet:
         return qs
 
     def defer(self, *fields):
-        """
-        Ko'rsatilgan ustunlardan tashqari barcha ustunlarni yuklaydi (Asinxron).
-        """
         qs = self._clone()
         if not fields:
             return qs
@@ -1628,15 +1602,26 @@ class AsyncQuerySet:
         return qs
 
     def select_for_update(self):
-        """
-        Joriy tranzaksiya doirasida tanlangan qatorlarni qulflash (lock) uchun.
-        Pessimistic locking (balans yangilash va sh.k. poyga holatlarining oldini olish uchun).
-        """
         qs = self._clone()
         qs._select_for_update = True
         return qs
 
     async def all(self):
+        cache_key = None
+        if getattr(self, "_cache_ttl", None) is not None:
+            cache_key = (
+                self.model.__name__,
+                self._columns,
+                str(self._where),
+                str(self._order_by),
+                self._limit,
+                self._offset,
+            )
+            if cache_key in _query_cache:
+                cached_time, cached_res = _query_cache[cache_key]
+                if time.time() - cached_time < self._cache_ttl:
+                    return cached_res
+
         where = self._build_where()
 
         group_by = self._group_by
@@ -1657,19 +1642,24 @@ class AsyncQuerySet:
         )
 
         if getattr(self, "_return_type", None) == "dict":
-            return records
+            res = records
         elif getattr(self, "_return_type", None) == "list":
             if getattr(self, "_flat", False):
-                return [
+                res = [
                     list(r.values())[0] if isinstance(r, dict) else r[0]
                     for r in records
                 ]
-            return [
-                tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records
-            ]
+            else:
+                res = [
+                    tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records
+                ]
+        else:
+            instances = self._hydrate_records(records)
+            res = await self._process_prefetch(instances)
 
-        instances = self._hydrate_records(records)
-        res = await self._process_prefetch(instances)
+        if cache_key is not None:
+            _query_cache[cache_key] = (time.time(), res)
+
         return res
 
     async def first(self):
@@ -1727,29 +1717,6 @@ class AsyncQuerySet:
         params = kwargs.copy()
         params.update(defaults)
         return await self.model.create(**params), True
-
-    async def update(self, force: bool = False, **kwargs):
-        for name, field in self.model._fields.items():
-            if getattr(field, "auto_now", False) and name not in kwargs:
-                kwargs[name] = field.get_current_value()
-        if not kwargs:
-            return 0
-        where = self._build_where()
-        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
-        if not has_where and not (force or getattr(self, "_force", False)):
-            raise ValueError(
-                "Ommaviy update uchun filter berish shart! (Barcha qatorlarni o'zgartirish uchun force=True yoki .force() ishlating)"
-            )
-        return await self.model.db.update_where(self.model.table, kwargs, where=where)
-
-    async def delete(self, force: bool = False):
-        where = self._build_where()
-        has_where = where and (not isinstance(where, Q) or where.conditions or where.children)
-        if not has_where and not (force or getattr(self, "_force", False)):
-            raise ValueError(
-                "Ommaviy delete uchun filter berish shart! (Barcha qatorlarni o'chirish uchun force=True yoki .force() ishlating)"
-            )
-        return await self.model.db.delete_where(self.model.table, where=where)
 
     async def last(self):
         where = self._build_where()
@@ -1819,6 +1786,20 @@ class AsyncQuerySet:
             group_by=self._group_by,
         )
 
+    async def paginate(self, page: int, per_page: int):
+        total = await self.count()
+        pages = (total + per_page - 1) // per_page
+        data = await self.limit(per_page).offset((page - 1) * per_page).all()
+        return PaginationResult(
+            total=total,
+            pages=pages,
+            current_page=page,
+            per_page=per_page,
+            has_next=page < pages,
+            has_prev=page > 1,
+            data=data,
+        )
+
     def _get_order_by_sql(self):
         order_by = self._order_by
         if not order_by:
@@ -1841,6 +1822,9 @@ class AsyncQuerySet:
             else:
                 col = item.strip()
                 direction = "ASC"
+
+            if not re.match(r'^[a-zA-Z0-9_.]+$', col):
+                raise ValueError(f"Yaroqsiz tartiblash ustuni (SQL ineksiya xavfi): {col}")
 
             if "." not in col:
                 col = f"{self.model.table}.{col}"
@@ -1891,6 +1875,12 @@ class AsyncQuerySet:
                         final_q &= ~Q(**e)
 
         return final_q if (final_q.conditions or final_q.children) else None
+
+    async def __aiter__(self):
+        """AsyncQuerySet ni asinxron (async for) sikliga qo'yish imkonini beradi."""
+        records = await self.all()
+        for record in records:
+            yield record
 
 
 class FindQuerySet(QuerySet):
