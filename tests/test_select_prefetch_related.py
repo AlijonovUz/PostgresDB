@@ -60,7 +60,29 @@ class TestSelectAndPrefetchRelated(unittest.TestCase):
         self.assertTrue(any("LEFT JOIN async_category" in j[0] + " " + j[1] for j in qs2._join))
         self.assertTrue(any("async_product.category_id = async_category.id" in j[2] for j in qs2._join))
 
+    def test_ordering_prefix(self):
+        class OrderItem(Model):
+            id = fields.Serial(primary_key=True)
+            created_at = fields.String()
+
+            class Meta:
+                ordering = ["-created_at"]
+
+        class AsyncOrderItem(AsyncModel):
+            id = fields.Serial(primary_key=True)
+            created_at = fields.String()
+
+            class Meta:
+                ordering = ["-created_at"]
+
+        qs_sync = OrderItem.query()
+        self.assertEqual(qs_sync._get_order_by_sql(), "order_item.created_at DESC")
+
+        qs_async = AsyncOrderItem.query()
+        self.assertEqual(qs_async._get_order_by_sql(), "async_order_item.created_at DESC")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

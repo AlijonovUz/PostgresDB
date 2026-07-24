@@ -725,16 +725,23 @@ class QuerySet:
                 continue
             item = item.strip()
             if item.startswith("-"):
-                parts.append(f"{item[1:]} DESC")
+                col = item[1:].strip()
+                direction = "DESC"
             else:
-                parts.append(f"{item} ASC")
+                col = item.strip()
+                direction = "ASC"
+
+            if "." not in col:
+                col = f"{self.model.table}.{col}"
+
+            parts.append(f"{col} {direction}")
         return ", ".join(parts) if parts else None
 
     def _get_reverse_order_by_sql(self):
         order_sql = self._get_order_by_sql()
         if not order_sql:
             pk_name = self.model.get_pk_name()
-            return f"{pk_name} DESC"
+            return f"{self.model.table}.{pk_name} DESC"
 
         parts = []
         for part in order_sql.split(","):
@@ -1427,16 +1434,23 @@ class AsyncQuerySet:
                 continue
             item = item.strip()
             if item.startswith("-"):
-                parts.append(f"{item[1:]} DESC")
+                col = item[1:].strip()
+                direction = "DESC"
             else:
-                parts.append(f"{item} ASC")
+                col = item.strip()
+                direction = "ASC"
+
+            if "." not in col:
+                col = f"{self.model.table}.{col}"
+
+            parts.append(f"{col} {direction}")
         return ", ".join(parts) if parts else None
 
     def _get_reverse_order_by_sql(self):
         order_sql = self._get_order_by_sql()
         if not order_sql:
             pk_name = self.model.get_pk_name()
-            return f"{pk_name} DESC"
+            return f"{self.model.table}.{pk_name} DESC"
 
         parts = []
         for part in order_sql.split(","):
