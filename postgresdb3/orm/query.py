@@ -453,9 +453,9 @@ class QuerySet:
 
             if is_fk_comparison:
                 parts[0] = relation.field_name
-                key = "__".join(parts)
+                key = f"{self.model.table}.{'__'.join(parts)}"
 
-            elif len(parts) >= 2:
+            elif len(parts) >= 2 and is_fk_relation:
                 if relation and hasattr(relation, "related_model"):
                     target_table = relation.related_model.table
                     source_col = getattr(relation, "field_name", field_name)
@@ -480,6 +480,9 @@ class QuerySet:
                     new_key = f"{target_table}.{'__'.join(parts[1:])}"
                     new_kwargs[new_key] = value
                     continue
+            else:
+                if "." not in key:
+                    key = f"{self.model.table}.{key}"
 
             new_kwargs[key] = value
 
@@ -1445,9 +1448,9 @@ class AsyncQuerySet:
 
             if is_fk_comparison:
                 parts[0] = relation.field_name
-                key = "__".join(parts)
+                key = f"{self.model.table}.{'__'.join(parts)}"
 
-            elif len(parts) >= 2:
+            elif len(parts) >= 2 and is_fk_relation:
                 if relation and hasattr(relation, "related_model"):
                     target_table = relation.related_model.table
                     source_col = getattr(relation, "field_name", field_name)
@@ -1472,6 +1475,9 @@ class AsyncQuerySet:
                     new_key = f"{target_table}.{'__'.join(parts[1:])}"
                     new_kwargs[new_key] = value
                     continue
+            else:
+                if "." not in key:
+                    key = f"{self.model.table}.{key}"
 
             new_kwargs[key] = value
 
@@ -1886,13 +1892,11 @@ class AsyncQuerySet:
 class FindQuerySet(QuerySet):
     """
     Model.find(pk) orqali qaytariladigan so'rov obyekti.
-    To'g'ridan-to'g'ri update/delete chaqirish ham, model atributlariga murojaat qilish ham mumkin.
     """
-
     def __init__(self, model, pk_value):
         super().__init__(model)
         self.pk_value = pk_value
-        self._where = [{model.get_pk_name(): pk_value}]
+        self._where = [{f"{model.table}.{model.get_pk_name()}": pk_value}]
         self._instance = None
         self._fetched = False
 
@@ -1941,15 +1945,11 @@ class FindQuerySet(QuerySet):
 class AsyncFindQuerySet(AsyncQuerySet):
     """
     AsyncModel.find(pk) orqali qaytariladigan asinxron so'rov obyekti.
-    await AsyncModel.find(pk) -> Model obyekti qaytaradi.
-    await AsyncModel.find(pk).update(...) -> yangilaydi.
-    await AsyncModel.find(pk).delete() -> o'chiradi.
     """
-
     def __init__(self, model, pk_value):
         super().__init__(model)
         self.pk_value = pk_value
-        self._where = [{model.get_pk_name(): pk_value}]
+        self._where = [{f"{model.table}.{model.get_pk_name()}": pk_value}]
 
     def __await__(self):
         return self.first().__await__()
