@@ -97,11 +97,38 @@ class TestSelectAndPrefetchRelated(unittest.TestCase):
 
         Product.query().select_related("category").all()
         call_args = Product.db.select.call_args
-        self.assertEqual(call_args.kwargs.get("columns"), "product.*")
+        columns = call_args.kwargs.get("columns")
+        self.assertIn("product.id AS id", columns)
+        self.assertIn("category.id AS __rel__category__id", columns)
+
+    def test_select_related_first_and_last(self):
+        class Category(Model):
+            id = fields.Serial(primary_key=True)
+            name = fields.String(length=50)
+
+        class Product(Model):
+            id = fields.Serial(primary_key=True)
+            name = fields.String(length=100)
+            category = fields.ForeignKey(Category, on_delete=fields.CASCADE)
+
+        Product.db = MagicMock()
+        Product.db.select.return_value = [{
+            "id": 1,
+            "name": "Laptop",
+            "category_id": 10,
+            "__rel__category__id": 10,
+            "__rel__category__name": "Electronics"
+        }]
+
+        p = Product.query().select_related("category").first()
+        self.assertIsNotNone(p)
+        self.assertEqual(p.name, "Laptop")
+        self.assertEqual(p.category.name, "Electronics")
 
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

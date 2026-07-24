@@ -33,6 +33,8 @@ class QuerySet:
         self._group_by = None
         self._select_for_update = False
         self._cache_ttl = None
+        self._select_related = None
+        self._prefetch = None
 
     def _clone(self):
         qs = self.__class__(self.model)
@@ -54,10 +56,12 @@ class QuerySet:
         qs._limit = self._limit
         qs._offset = self._offset
         qs._columns = self._columns
-        qs._join = self._join
+        qs._join = list(self._join) if self._join else None
         qs._group_by = self._group_by
         qs._select_for_update = self._select_for_update
         qs._cache_ttl = self._cache_ttl
+        qs._select_related = list(self._select_related) if self._select_related else None
+        qs._prefetch = list(self._prefetch) if self._prefetch else None
         return qs
 
     def cache(self, ttl: float = 60.0):
@@ -109,6 +113,73 @@ class QuerySet:
         qs._join.append((join_type, table, on_condition))
         return qs
 
+    def _get_columns_sql(self):
+        if self._columns != "*":
+            columns = self._columns
+        elif self._select_related:
+            cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
+            for rel_name in self._select_related:
+                rel_attr = getattr(self.model, rel_name, None)
+                if rel_attr and hasattr(rel_attr, "related_model"):
+                    rmodel = rel_attr.related_model
+                    for rf in rmodel._fields.keys():
+                        cols.append(f"{rmodel.table}.{rf} AS __rel__{rel_name}__{rf}")
+            columns = ", ".join(cols)
+        elif self._join or (hasattr(self, "_annotations") and self._annotations):
+            columns = f"{self.model.table}.*"
+        else:
+            columns = "*"
+
+        if hasattr(self, "_annotations") and self._annotations:
+            for alias, expression in self._annotations.items():
+                if hasattr(expression, "to_sql"):
+                    columns += f", {expression.to_sql()} AS {alias}"
+                else:
+                    columns += f", {expression} AS {alias}"
+
+        return columns
+
+    def _hydrate_records(self, records):
+        if not records:
+            return []
+        if isinstance(records, dict) or hasattr(records, "items"):
+            records = [records]
+
+        instances = []
+        for record in records:
+            if isinstance(record, dict):
+                row = record
+            elif hasattr(record, "_asdict"):
+                row = record._asdict()
+            elif hasattr(record, "items"):
+                row = dict(record)
+            else:
+                instances.append(self.model._from_record(record))
+                continue
+
+            if self._select_related:
+                main_data = {k: v for k, v in row.items() if not k.startswith("__rel__")}
+                inst = self.model._from_record(main_data)
+
+                for rel_name in self._select_related:
+                    prefix = f"__rel__{rel_name}__"
+                    rel_data = {k[len(prefix):]: v for k, v in row.items() if k.startswith(prefix)}
+                    rel_attr = getattr(self.model, rel_name, None)
+                    if rel_attr and hasattr(rel_attr, "related_model"):
+                        rmodel = rel_attr.related_model
+                        pk_col = rmodel.get_pk_name()
+                        if rel_data and rel_data.get(pk_col) is not None:
+                            rel_inst = rmodel._from_record(rel_data)
+                        else:
+                            rel_inst = None
+                        setattr(inst, f"_prefetched_{rel_name}", rel_inst)
+            else:
+                inst = self.model._from_record(row)
+
+            instances.append(inst)
+
+        return instances
+
     def select_related(self, *fields):
         """
         N+1 muammosini oldini olish uchun yozilgan metod.
@@ -118,6 +189,8 @@ class QuerySet:
         qs = self._clone()
         if qs._join is None:
             qs._join = []
+        if qs._select_related is None:
+            qs._select_related = []
 
         from postgresdb3.orm.relations import (
             ForeignKeyRelation,
@@ -127,6 +200,7 @@ class QuerySet:
 
         for field_name in fields:
             rel_attr = getattr(self.model, field_name, None)
+            rel_name = field_name
             if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
                 db_col = rel_attr.field_name
                 field = self.model._fields.get(db_col)
@@ -137,6 +211,7 @@ class QuerySet:
                     possible_rel = field_name[:-3]
                     rel_attr = getattr(self.model, possible_rel, None)
                     if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        rel_name = possible_rel
                         db_col = rel_attr.field_name
                         field = self.model._fields.get(db_col)
 
@@ -152,9 +227,13 @@ class QuerySet:
 
             related_table = field.to.table
             on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
-            qs._join.append(("LEFT JOIN", related_table, on_condition))
+            if not any(j[1] == related_table for j in qs._join):
+                qs._join.append(("LEFT JOIN", related_table, on_condition))
 
-        return qs.prefetch_related(*fields)
+            if rel_name not in qs._select_related:
+                qs._select_related.append(rel_name)
+
+        return qs
 
     def prefetch_related(self, *fields):
         """
@@ -163,7 +242,7 @@ class QuerySet:
         `category` va `category_id` ko'rinishida ham berish mumkin.
         """
         qs = self._clone()
-        if not hasattr(qs, "_prefetch"):
+        if qs._prefetch is None:
             qs._prefetch = []
 
         normalized_fields = []
@@ -435,26 +514,13 @@ class QuerySet:
 
         where = self._build_where()
 
-        columns = self._columns or "*"
         group_by = self._group_by
-
-        if columns == "*":
-            if self._join or (hasattr(self, "_annotations") and self._annotations):
-                columns = f"{self.model.table}.*"
-
-        if hasattr(self, "_annotations") and self._annotations:
-            for alias, expression in self._annotations.items():
-                if hasattr(expression, "to_sql"):
-                    columns += f", {expression.to_sql()} AS {alias}"
-                else:
-                    columns += f", {expression} AS {alias}"
-
-            if not group_by:
-                group_by = f"{self.model.table}.{self.model.get_pk_name()}"
+        if hasattr(self, "_annotations") and self._annotations and not group_by:
+            group_by = f"{self.model.table}.{self.model.get_pk_name()}"
 
         records = self.model.db.select(
             self.model.table,
-            columns=columns,
+            columns=self._get_columns_sql(),
             where=where,
             join=self._join,
             group_by=group_by,
@@ -478,7 +544,7 @@ class QuerySet:
                     for r in records
                 ]
         else:
-            instances = self.model._from_records(records)
+            instances = self._hydrate_records(records)
             res = self._process_prefetch(instances)
 
         if cache_key is not None:
@@ -579,56 +645,61 @@ class QuerySet:
 
     def first(self):
         where = self._build_where()
-        columns = self._columns or "*"
-        if columns == "*" and (self._join or (hasattr(self, "_annotations") and self._annotations)):
-            columns = f"{self.model.table}.*"
-
-        record = self.model.db.select(
+        records = self.model.db.select(
             self.model.table,
-            columns=columns,
+            columns=self._get_columns_sql(),
             where=where,
             join=self._join,
             group_by=self._group_by,
             order_by=self._get_order_by_sql(),
             limit=1 if self._limit is None else self._limit,
             offset=self._offset,
-            fetchone=True,
+            fetchone=False,
             for_update=self._select_for_update,
         )
-        return self.model._from_record(record)
+        if not records:
+            return None
+
+        if getattr(self, "_return_type", None) == "dict":
+            return records[0]
+        elif getattr(self, "_return_type", None) == "list":
+            rec = records[0]
+            if getattr(self, "_flat", False):
+                return list(rec.values())[0] if isinstance(rec, dict) else rec[0]
+            return tuple(rec.values()) if isinstance(rec, dict) else tuple(rec)
+
+        instances = self._hydrate_records(records)
+        instances = self._process_prefetch(instances)
+        return instances[0] if instances else None
 
     def last(self):
         where = self._build_where()
-        columns = self._columns or "*"
-        if columns == "*" and (self._join or (hasattr(self, "_annotations") and self._annotations)):
-            columns = f"{self.model.table}.*"
-
-        record = self.model.db.select(
+        records = self.model.db.select(
             self.model.table,
-            columns=columns,
+            columns=self._get_columns_sql(),
             where=where,
             join=self._join,
             group_by=self._group_by,
             order_by=self._get_reverse_order_by_sql(),
             limit=1,
             offset=self._offset,
-            fetchone=True,
+            fetchone=False,
             for_update=self._select_for_update,
         )
-
-        if not record:
+        if not records:
             return None
 
         if getattr(self, "_return_type", None) == "dict":
-            return record
+            return records[0]
         elif getattr(self, "_return_type", None) == "list":
+            rec = records[0]
             if getattr(self, "_flat", False):
-                return (
-                    list(record.values())[0] if isinstance(record, dict) else record[0]
-                )
-            return tuple(record.values()) if isinstance(record, dict) else tuple(record)
+                return list(rec.values())[0] if isinstance(rec, dict) else rec[0]
+            return tuple(rec.values()) if isinstance(rec, dict) else tuple(rec)
 
-        return self.model._from_record(record)
+        instances = self._hydrate_records(records)
+        instances = self._process_prefetch(instances)
+        return instances[0] if instances else None
 
     def get_or_create(self, defaults=None, **kwargs):
         qs = self.filter(**kwargs)
@@ -818,6 +889,8 @@ class AsyncQuerySet:
         self._join = None
         self._group_by = None
         self._select_for_update = False
+        self._select_related = None
+        self._prefetch = None
 
     def _clone(self):
         qs = self.__class__(self.model)
@@ -839,9 +912,11 @@ class AsyncQuerySet:
         qs._limit = self._limit
         qs._offset = self._offset
         qs._columns = self._columns
-        qs._join = self._join
+        qs._join = list(self._join) if self._join else None
         qs._group_by = self._group_by
         qs._select_for_update = self._select_for_update
+        qs._select_related = list(self._select_related) if self._select_related else None
+        qs._prefetch = list(self._prefetch) if self._prefetch else None
         return qs
 
     async def update(self, **kwargs):
@@ -1060,6 +1135,73 @@ class AsyncQuerySet:
         qs._join.append((join_type, table, on_condition))
         return qs
 
+    def _get_columns_sql(self):
+        if self._columns != "*":
+            columns = self._columns
+        elif self._select_related:
+            cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
+            for rel_name in self._select_related:
+                rel_attr = getattr(self.model, rel_name, None)
+                if rel_attr and hasattr(rel_attr, "related_model"):
+                    rmodel = rel_attr.related_model
+                    for rf in rmodel._fields.keys():
+                        cols.append(f"{rmodel.table}.{rf} AS __rel__{rel_name}__{rf}")
+            columns = ", ".join(cols)
+        elif self._join or (hasattr(self, "_annotations") and self._annotations):
+            columns = f"{self.model.table}.*"
+        else:
+            columns = "*"
+
+        if hasattr(self, "_annotations") and self._annotations:
+            for alias, expression in self._annotations.items():
+                if hasattr(expression, "to_sql"):
+                    columns += f", {expression.to_sql()} AS {alias}"
+                else:
+                    columns += f", {expression} AS {alias}"
+
+        return columns
+
+    def _hydrate_records(self, records):
+        if not records:
+            return []
+        if isinstance(records, dict) or hasattr(records, "items"):
+            records = [records]
+
+        instances = []
+        for record in records:
+            if isinstance(record, dict):
+                row = record
+            elif hasattr(record, "_asdict"):
+                row = record._asdict()
+            elif hasattr(record, "items"):
+                row = dict(record)
+            else:
+                instances.append(self.model._from_record(record))
+                continue
+
+            if self._select_related:
+                main_data = {k: v for k, v in row.items() if not k.startswith("__rel__")}
+                inst = self.model._from_record(main_data)
+
+                for rel_name in self._select_related:
+                    prefix = f"__rel__{rel_name}__"
+                    rel_data = {k[len(prefix):]: v for k, v in row.items() if k.startswith(prefix)}
+                    rel_attr = getattr(self.model, rel_name, None)
+                    if rel_attr and hasattr(rel_attr, "related_model"):
+                        rmodel = rel_attr.related_model
+                        pk_col = rmodel.get_pk_name()
+                        if rel_data and rel_data.get(pk_col) is not None:
+                            rel_inst = rmodel._from_record(rel_data)
+                        else:
+                            rel_inst = None
+                        setattr(inst, f"_prefetched_{rel_name}", rel_inst)
+            else:
+                inst = self.model._from_record(row)
+
+            instances.append(inst)
+
+        return instances
+
     def select_related(self, *fields):
         """
         N+1 muammosini oldini olish uchun yozilgan asinxron metod.
@@ -1069,6 +1211,8 @@ class AsyncQuerySet:
         qs = self._clone()
         if qs._join is None:
             qs._join = []
+        if qs._select_related is None:
+            qs._select_related = []
 
         from postgresdb3.orm.relations import (
             ForeignKeyRelation,
@@ -1078,6 +1222,7 @@ class AsyncQuerySet:
 
         for field_name in fields:
             rel_attr = getattr(self.model, field_name, None)
+            rel_name = field_name
             if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
                 db_col = rel_attr.field_name
                 field = self.model._fields.get(db_col)
@@ -1088,6 +1233,7 @@ class AsyncQuerySet:
                     possible_rel = field_name[:-3]
                     rel_attr = getattr(self.model, possible_rel, None)
                     if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        rel_name = possible_rel
                         db_col = rel_attr.field_name
                         field = self.model._fields.get(db_col)
 
@@ -1103,9 +1249,13 @@ class AsyncQuerySet:
 
             related_table = field.to.table
             on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
-            qs._join.append(("LEFT JOIN", related_table, on_condition))
+            if not any(j[1] == related_table for j in qs._join):
+                qs._join.append(("LEFT JOIN", related_table, on_condition))
 
-        return qs.prefetch_related(*fields)
+            if rel_name not in qs._select_related:
+                qs._select_related.append(rel_name)
+
+        return qs
 
     def group_by(self, value):
         qs = self._clone()
@@ -1174,7 +1324,7 @@ class AsyncQuerySet:
 
     def prefetch_related(self, *fields):
         qs = self._clone()
-        if not hasattr(qs, "_prefetch"):
+        if qs._prefetch is None:
             qs._prefetch = []
         qs._prefetch.extend(fields)
         return qs
@@ -1191,26 +1341,13 @@ class AsyncQuerySet:
     async def all(self):
         where = self._build_where()
 
-        columns = self._columns or "*"
         group_by = self._group_by
-
-        if columns == "*":
-            if self._join or (hasattr(self, "_annotations") and self._annotations):
-                columns = f"{self.model.table}.*"
-
-        if hasattr(self, "_annotations") and self._annotations:
-            for alias, expression in self._annotations.items():
-                if hasattr(expression, "to_sql"):
-                    columns += f", {expression.to_sql()} AS {alias}"
-                else:
-                    columns += f", {expression} AS {alias}"
-
-            if not group_by:
-                group_by = f"{self.model.table}.{self.model.get_pk_name()}"
+        if hasattr(self, "_annotations") and self._annotations and not group_by:
+            group_by = f"{self.model.table}.{self.model.get_pk_name()}"
 
         records = await self.model.db.select(
             self.model.table,
-            columns=columns,
+            columns=self._get_columns_sql(),
             where=where,
             join=self._join,
             group_by=group_by,
@@ -1233,128 +1370,39 @@ class AsyncQuerySet:
                 tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in records
             ]
 
-        instances = self.model._from_records(records)
-
-        if hasattr(self, "_prefetch") and self._prefetch and instances:
-            for field_name in self._prefetch:
-                relation = getattr(self.model, field_name, None)
-                if not relation:
-                    continue
-
-                pk_name = self.model.get_pk_name()
-                instance_pks = [getattr(inst, pk_name) for inst in instances]
-
-                from postgresdb3.orm.relations import (
-                    ManyToManyRelation,
-                    AsyncReverseRelation,
-                    ForeignKeyRelation,
-                    AsyncForeignKeyRelation,
-                )
-
-                if isinstance(relation, ManyToManyRelation):
-                    target_model = relation.target_model
-                    through_table = relation.through_table
-                    source_col = relation.source_col
-                    target_col = relation.target_col
-
-                    placeholders = ", ".join(
-                        [f"${i+1}" for i in range(len(instance_pks))]
-                    )
-                    sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
-
-                    mapping_records = await self.model.db._manager(
-                        sql, *instance_pks, fetchall=True
-                    )
-
-                    mapping_dict = {}
-                    target_ids = set()
-                    for r in mapping_records:
-                        s_id, t_id = r[source_col], r[target_col]
-                        if s_id not in mapping_dict:
-                            mapping_dict[s_id] = []
-                        mapping_dict[s_id].append(t_id)
-                        target_ids.add(t_id)
-
-                    if target_ids:
-                        target_instances = await target_model.filter(
-                            **{f"{target_model.get_pk_name()}__in": list(target_ids)}
-                        ).all()
-                        target_map = {
-                            getattr(t, target_model.get_pk_name()): t
-                            for t in target_instances
-                        }
-
-                        for inst in instances:
-                            pk = getattr(inst, pk_name)
-                            prefetched = [
-                                target_map[t_id]
-                                for t_id in mapping_dict.get(pk, [])
-                                if t_id in target_map
-                            ]
-                            setattr(inst, f"_prefetched_{field_name}", prefetched)
-
-                elif isinstance(relation, AsyncReverseRelation):
-                    related_model = relation.related_model
-                    fk_name = relation.fk_name
-
-                    related_instances = await related_model.filter(
-                        **{f"{fk_name}__in": instance_pks}
-                    ).all()
-
-                    for inst in instances:
-                        pk = getattr(inst, pk_name)
-                        prefetched = [
-                            r for r in related_instances if getattr(r, fk_name) == pk
-                        ]
-                        setattr(inst, f"_prefetched_{field_name}", prefetched)
-
-                elif isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                    related_model = relation.related_model
-                    fk_col = relation.field_name
-                    fk_vals = list({getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
-                    if fk_vals:
-                        to_field = relation.to_field
-                        related_instances = await related_model.filter(**{f"{to_field}__in": fk_vals}).all()
-                        related_map = {getattr(r, to_field): r for r in related_instances}
-                        for inst in instances:
-                            fk_val = getattr(inst, fk_col, None)
-                            if fk_val in related_map:
-                                setattr(inst, f"_prefetched_{field_name}", related_map[fk_val])
-
-        return instances
+        instances = self._hydrate_records(records)
+        res = await self._process_prefetch(instances)
+        return res
 
     async def first(self):
         where = self._build_where()
-        columns = self._columns or "*"
-        if columns == "*" and (self._join or (hasattr(self, "_annotations") and self._annotations)):
-            columns = f"{self.model.table}.*"
-
-        record = await self.model.db.select(
+        records = await self.model.db.select(
             self.model.table,
-            columns=columns,
+            columns=self._get_columns_sql(),
             where=where,
             join=self._join,
             group_by=self._group_by,
             order_by=self._get_order_by_sql(),
             limit=1 if self._limit is None else self._limit,
             offset=self._offset,
-            fetchone=True,
+            fetchone=False,
             for_update=self._select_for_update,
         )
 
-        if not record:
+        if not records:
             return None
 
         if getattr(self, "_return_type", None) == "dict":
-            return record
+            return records[0]
         elif getattr(self, "_return_type", None) == "list":
+            rec = records[0]
             if getattr(self, "_flat", False):
-                return (
-                    list(record.values())[0] if isinstance(record, dict) else record[0]
-                )
-            return tuple(record.values()) if isinstance(record, dict) else tuple(record)
+                return list(rec.values())[0] if isinstance(rec, dict) else rec[0]
+            return tuple(rec.values()) if isinstance(rec, dict) else tuple(rec)
 
-        return self.model._from_record(record)
+        instances = self._hydrate_records(records)
+        instances = await self._process_prefetch(instances)
+        return instances[0] if instances else None
 
     async def get_or_create(self, defaults=None, **kwargs):
         qs = self.filter(**kwargs)
@@ -1410,20 +1458,33 @@ class AsyncQuerySet:
     async def last(self):
         where = self._build_where()
 
-        record = await self.model.db.select(
+        records = await self.model.db.select(
             self.model.table,
-            columns=self._columns,
+            columns=self._get_columns_sql(),
             where=where,
             join=self._join,
             group_by=self._group_by,
             order_by=self._get_reverse_order_by_sql(),
             limit=1,
             offset=self._offset,
-            fetchone=True,
+            fetchone=False,
             for_update=self._select_for_update,
         )
 
-        return self.model._from_record(record)
+        if not records:
+            return None
+
+        if getattr(self, "_return_type", None) == "dict":
+            return records[0]
+        elif getattr(self, "_return_type", None) == "list":
+            rec = records[0]
+            if getattr(self, "_flat", False):
+                return list(rec.values())[0] if isinstance(rec, dict) else rec[0]
+            return tuple(rec.values()) if isinstance(rec, dict) else tuple(rec)
+
+        instances = self._hydrate_records(records)
+        instances = await self._process_prefetch(instances)
+        return instances[0] if instances else None
 
     async def count(self):
         where = self._build_where()
