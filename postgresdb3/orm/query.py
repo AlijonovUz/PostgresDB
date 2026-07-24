@@ -154,7 +154,7 @@ class QuerySet:
             on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
             qs._join.append(("LEFT JOIN", related_table, on_condition))
 
-        return qs
+        return qs.prefetch_related(*fields)
 
     def prefetch_related(self, *fields):
         """
@@ -438,9 +438,11 @@ class QuerySet:
         columns = self._columns or "*"
         group_by = self._group_by
 
-        if hasattr(self, "_annotations") and self._annotations:
-            if columns == "*":
+        if columns == "*":
+            if self._join or (hasattr(self, "_annotations") and self._annotations):
                 columns = f"{self.model.table}.*"
+
+        if hasattr(self, "_annotations") and self._annotations:
             for alias, expression in self._annotations.items():
                 if hasattr(expression, "to_sql"):
                     columns += f", {expression.to_sql()} AS {alias}"
@@ -497,6 +499,8 @@ class QuerySet:
                 from postgresdb3.orm.relations import (
                     ManyToManyRelation,
                     ReverseRelation,
+                    ForeignKeyRelation,
+                    AsyncForeignKeyRelation,
                 )
 
                 if isinstance(relation, ManyToManyRelation):
@@ -558,13 +562,30 @@ class QuerySet:
                         ]
                         setattr(inst, f"_prefetched_{field_name}", prefetched)
 
+                elif isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    related_model = relation.related_model
+                    fk_col = relation.field_name
+                    fk_vals = list({getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
+                    if fk_vals:
+                        to_field = relation.to_field
+                        related_instances = related_model.filter(**{f"{to_field}__in": fk_vals}).all()
+                        related_map = {getattr(r, to_field): r for r in related_instances}
+                        for inst in instances:
+                            fk_val = getattr(inst, fk_col, None)
+                            if fk_val in related_map:
+                                setattr(inst, f"_prefetched_{field_name}", related_map[fk_val])
+
         return instances
 
     def first(self):
         where = self._build_where()
+        columns = self._columns or "*"
+        if columns == "*" and (self._join or (hasattr(self, "_annotations") and self._annotations)):
+            columns = f"{self.model.table}.*"
+
         record = self.model.db.select(
             self.model.table,
-            columns=self._columns,
+            columns=columns,
             where=where,
             join=self._join,
             group_by=self._group_by,
@@ -578,10 +599,13 @@ class QuerySet:
 
     def last(self):
         where = self._build_where()
+        columns = self._columns or "*"
+        if columns == "*" and (self._join or (hasattr(self, "_annotations") and self._annotations)):
+            columns = f"{self.model.table}.*"
 
         record = self.model.db.select(
             self.model.table,
-            columns=self._columns,
+            columns=columns,
             where=where,
             join=self._join,
             group_by=self._group_by,
@@ -1081,7 +1105,7 @@ class AsyncQuerySet:
             on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
             qs._join.append(("LEFT JOIN", related_table, on_condition))
 
-        return qs
+        return qs.prefetch_related(*fields)
 
     def group_by(self, value):
         qs = self._clone()
@@ -1170,9 +1194,11 @@ class AsyncQuerySet:
         columns = self._columns or "*"
         group_by = self._group_by
 
-        if hasattr(self, "_annotations") and self._annotations:
-            if columns == "*":
+        if columns == "*":
+            if self._join or (hasattr(self, "_annotations") and self._annotations):
                 columns = f"{self.model.table}.*"
+
+        if hasattr(self, "_annotations") and self._annotations:
             for alias, expression in self._annotations.items():
                 if hasattr(expression, "to_sql"):
                     columns += f", {expression.to_sql()} AS {alias}"
@@ -1221,6 +1247,8 @@ class AsyncQuerySet:
                 from postgresdb3.orm.relations import (
                     ManyToManyRelation,
                     AsyncReverseRelation,
+                    ForeignKeyRelation,
+                    AsyncForeignKeyRelation,
                 )
 
                 if isinstance(relation, ManyToManyRelation):
@@ -1280,13 +1308,30 @@ class AsyncQuerySet:
                         ]
                         setattr(inst, f"_prefetched_{field_name}", prefetched)
 
+                elif isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    related_model = relation.related_model
+                    fk_col = relation.field_name
+                    fk_vals = list({getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
+                    if fk_vals:
+                        to_field = relation.to_field
+                        related_instances = await related_model.filter(**{f"{to_field}__in": fk_vals}).all()
+                        related_map = {getattr(r, to_field): r for r in related_instances}
+                        for inst in instances:
+                            fk_val = getattr(inst, fk_col, None)
+                            if fk_val in related_map:
+                                setattr(inst, f"_prefetched_{field_name}", related_map[fk_val])
+
         return instances
 
     async def first(self):
         where = self._build_where()
+        columns = self._columns or "*"
+        if columns == "*" and (self._join or (hasattr(self, "_annotations") and self._annotations)):
+            columns = f"{self.model.table}.*"
+
         record = await self.model.db.select(
             self.model.table,
-            columns=self._columns,
+            columns=columns,
             where=where,
             join=self._join,
             group_by=self._group_by,

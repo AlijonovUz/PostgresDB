@@ -8,6 +8,13 @@ class ForeignKeyRelation:
         if instance is None:
             return self
 
+        if owner:
+            for attr_name, attr_val in owner.__dict__.items():
+                if attr_val is self:
+                    cache_key = f"_prefetched_{attr_name}"
+                    if cache_key in instance.__dict__:
+                        return instance.__dict__[cache_key]
+
         fk_value = instance.__dict__.get(self.field_name)
         if fk_value is None:
             return None
@@ -73,6 +80,13 @@ class AsyncForeignKeyRelation:
     def __get__(self, instance, owner):
         if instance is None:
             return self
+
+        if owner:
+            for attr_name, attr_val in owner.__dict__.items():
+                if attr_val is self:
+                    cache_key = f"_prefetched_{attr_name}"
+                    if cache_key in instance.__dict__:
+                        return instance.__dict__[cache_key]
 
         fk_value = instance.__dict__.get(self.field_name)
         if fk_value is None:

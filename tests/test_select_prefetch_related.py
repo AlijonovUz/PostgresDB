@@ -81,8 +81,27 @@ class TestSelectAndPrefetchRelated(unittest.TestCase):
         qs_async = AsyncOrderItem.query()
         self.assertEqual(qs_async._get_order_by_sql(), "async_order_item.created_at DESC")
 
+    def test_select_related_columns_prefix(self):
+        class Category(Model):
+            id = fields.Serial(primary_key=True)
+            name = fields.String(length=50)
+
+        class Product(Model):
+            id = fields.Serial(primary_key=True)
+            name = fields.String(length=100)
+            category = fields.ForeignKey(Category, on_delete=fields.CASCADE)
+
+        # Mock db.select to verify columns argument
+        Product.db = MagicMock()
+        Product.db.select.return_value = []
+
+        Product.query().select_related("category").all()
+        call_args = Product.db.select.call_args
+        self.assertEqual(call_args.kwargs.get("columns"), "product.*")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
