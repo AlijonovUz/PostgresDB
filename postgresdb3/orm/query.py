@@ -20,6 +20,19 @@ class PaginationResult(Generic[T]):
 _query_cache = {}
 
 
+def _get_all_model_field_names(model):
+    names = list(model._fields.keys())
+    pk = model.get_pk_name()
+    if isinstance(pk, (list, tuple)):
+        for p in pk:
+            if p not in names:
+                names.insert(0, p)
+    elif isinstance(pk, str):
+        if pk not in names:
+            names.insert(0, pk)
+    return names
+
+
 class QuerySet:
     def __init__(self, model):
         self.model = model
@@ -164,7 +177,8 @@ class QuerySet:
         if self._columns != "*":
             columns = self._columns
         elif self._select_related:
-            cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
+            main_fields = _get_all_model_field_names(self.model)
+            cols = [f"{self.model.table}.{f} AS {f}" for f in main_fields]
             from postgresdb3.orm.relations import (
                 ForeignKeyRelation,
                 AsyncForeignKeyRelation,
@@ -198,7 +212,8 @@ class QuerySet:
                     curr_alias = f"{curr_alias}__{rel_name}"
 
                 if curr_model != self.model:
-                    for rf in curr_model._fields.keys():
+                    rel_fields = _get_all_model_field_names(curr_model)
+                    for rf in rel_fields:
                         cols.append(f"{curr_alias}.{rf} AS __rel__{rel_str}__{rf}")
             columns = ", ".join(cols)
         elif self._join or (hasattr(self, "_annotations") and self._annotations):
@@ -1110,7 +1125,8 @@ class AsyncQuerySet:
         if self._columns != "*":
             columns = self._columns
         elif self._select_related:
-            cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
+            main_fields = _get_all_model_field_names(self.model)
+            cols = [f"{self.model.table}.{f} AS {f}" for f in main_fields]
             from postgresdb3.orm.relations import (
                 ForeignKeyRelation,
                 AsyncForeignKeyRelation,
@@ -1144,7 +1160,8 @@ class AsyncQuerySet:
                     curr_alias = f"{curr_alias}__{rel_name}"
 
                 if curr_model != self.model:
-                    for rf in curr_model._fields.keys():
+                    rel_fields = _get_all_model_field_names(curr_model)
+                    for rf in rel_fields:
                         cols.append(f"{curr_alias}.{rf} AS __rel__{rel_str}__{rf}")
             columns = ", ".join(cols)
         elif self._join or (hasattr(self, "_annotations") and self._annotations):
