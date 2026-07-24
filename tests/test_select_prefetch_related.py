@@ -40,6 +40,27 @@ class TestSelectAndPrefetchRelated(unittest.TestCase):
         qs4 = Product.filter().prefetch_related("category_id")
         self.assertIn("category", qs4._prefetch)
 
+    def test_async_select_related_both_names(self):
+        class AsyncCategory(AsyncModel):
+            id = fields.Serial(primary_key=True)
+            name = fields.String(length=50)
+
+        class AsyncProduct(AsyncModel):
+            id = fields.Serial(primary_key=True)
+            category = fields.ForeignKey(AsyncCategory, on_delete=fields.CASCADE)
+            title = fields.String(length=100)
+
+        # Test select_related with 'category' on AsyncModel / AsyncQuerySet
+        qs1 = AsyncProduct.query().select_related("category")
+        self.assertTrue(any("LEFT JOIN async_category" in j[0] + " " + j[1] for j in qs1._join))
+        self.assertTrue(any("async_product.category_id = async_category.id" in j[2] for j in qs1._join))
+
+        # Test select_related with 'category_id' on AsyncModel / AsyncQuerySet
+        qs2 = AsyncProduct.query().select_related("category_id")
+        self.assertTrue(any("LEFT JOIN async_category" in j[0] + " " + j[1] for j in qs2._join))
+        self.assertTrue(any("async_product.category_id = async_category.id" in j[2] for j in qs2._join))
+
 
 if __name__ == "__main__":
     unittest.main()
+

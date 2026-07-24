@@ -1033,19 +1033,37 @@ class AsyncQuerySet:
         """
         N+1 muammosini oldini olish uchun yozilgan asinxron metod.
         Berilgan ForeignKey maydonlari bo'yicha avtomatik JOIN qiladi.
+        `category` va `category_id` ko'rinishida ham berish mumkin.
         """
         qs = self._clone()
         if qs._join is None:
             qs._join = []
 
+        from postgresdb3.orm.relations import (
+            ForeignKeyRelation,
+            AsyncForeignKeyRelation,
+        )
+        from .fields.foreign import ManyToMany
+
         for field_name in fields:
-            field = self.model._fields.get(field_name)
+            rel_attr = getattr(self.model, field_name, None)
+            if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                db_col = rel_attr.field_name
+                field = self.model._fields.get(db_col)
+            else:
+                field = self.model._fields.get(field_name)
+                db_col = field_name
+                if not field and field_name.endswith("_id"):
+                    possible_rel = field_name[:-3]
+                    rel_attr = getattr(self.model, possible_rel, None)
+                    if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        db_col = rel_attr.field_name
+                        field = self.model._fields.get(db_col)
+
             if not field or not hasattr(field, "to"):
                 raise ValueError(
                     f"'{field_name}' xato kiritildi. select_related faqat ForeignKey yoki OneToOne bilan ishlaydi."
                 )
-
-            from .fields.foreign import ManyToMany
 
             if isinstance(field, ManyToMany):
                 raise TypeError(
@@ -1053,7 +1071,7 @@ class AsyncQuerySet:
                 )
 
             related_table = field.to.table
-            on_condition = f"{self.model.table}.{field_name} = {related_table}.{field.to.get_pk_name()}"
+            on_condition = f"{self.model.table}.{db_col} = {related_table}.{field.to.get_pk_name()}"
             qs._join.append(("LEFT JOIN", related_table, on_condition))
 
         return qs
