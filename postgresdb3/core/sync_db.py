@@ -20,9 +20,9 @@ class PostgresDB:
 
     def __init__(
         self,
-        database: str,
-        user: str,
-        password: str,
+        database: str = None,
+        user: str = None,
+        password: str = None,
         host: str = "localhost",
         port: int = 5432,
         minconn: int = 1,
@@ -30,7 +30,9 @@ class PostgresDB:
         echo: bool = False,
         ping_connections: bool = False,
         slow_query_threshold: float = 500.0,
+        dbname: str = None,
     ) -> None:
+        database = database or dbname
         self.echo = echo
         self.ping_connections = ping_connections
         self.slow_query_threshold = slow_query_threshold
@@ -117,14 +119,15 @@ class PostgresDB:
                             result = None
                         else:
                             cursor.execute(sql, params)
+                            result = None
                             if fetchone:
                                 result = cursor.fetchone()
                             elif fetchall:
                                 result = cursor.fetchall()
                             elif fetchmany is not None:
                                 result = cursor.fetchmany(fetchmany)
-                            else:
-                                result = None
+                        if commit and not in_transaction and not conn.autocommit:
+                            conn.commit()
 
                     return result
                 except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
@@ -159,6 +162,9 @@ class PostgresDB:
         if self.pool:
             self.pool.closeall()
             self.pool = None
+
+    def execute(self, sql: str, params: Optional[Union[list, tuple]] = None) -> Any:
+        return self.raw(sql, params, commit=True)
 
     def raw(
         self,
@@ -407,9 +413,13 @@ class PostgresDB:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} bo'sh bo'lmasligi kerak")
 
-        cleaned = value.replace("_", "").replace(".", "")
-        if not cleaned.isalnum():
-            raise ValueError(f"Invalid {name}: {value}")
+        parts = value.split()
+        for part in parts:
+            if part.upper() in ("AS", "ASC", "DESC", "DISTINCT", "ON"):
+                continue
+            cleaned = part.replace("_", "").replace(".", "").replace('"', "").replace("'", "")
+            if not cleaned.isalnum() and cleaned != "*":
+                raise ValueError(f"Invalid {name}: {value}")
 
         return value
 
@@ -566,14 +576,13 @@ class PostgresDB:
 
         return affected_rows
 
-    def update_where(self, table: str, data: dict, where: tuple | dict | list) -> int:
+    def update_where(
+        self, table: str, data: dict, where: tuple | dict | list | None = None
+    ) -> int:
         table = self._validate_identifier(table, "table")
 
         if not data:
             raise ValueError("Yangilash uchun data bo'sh bo'lmasligi kerak")
-
-        if not where:
-            raise ValueError("update_where uchun where bo'sh bo'lmasligi kerak")
 
         set_parts = []
         params = []
@@ -587,19 +596,23 @@ class PostgresDB:
                 set_parts.append(f"{key} = %s")
                 params.append(value)
 
-        where_sql, where_params = self._build_where(where)
-        if not where_sql:
-            raise ValueError("WHERE sharti noto'g'ri")
-
-        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
-        params.extend(where_params)
+        if where:
+            where_sql, where_params = self._build_where(where)
+            if where_sql:
+                sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
+                params.extend(where_params)
+            else:
+                sql = f"UPDATE {table} SET {', '.join(set_parts)}"
+        else:
+            sql = f"UPDATE {table} SET {', '.join(set_parts)}"
 
         conn = self.pool.getconn()
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, tuple(params))
                 affected_rows = cursor.rowcount
-                conn.commit()
+                if not conn.autocommit:
+                    conn.commit()
         finally:
             self.pool.putconn(conn)
 
@@ -609,30 +622,31 @@ class PostgresDB:
         sql = f"DELETE FROM {table} WHERE {where_column} = %s"
         self._manager(sql, (where_value,), commit=True)
 
-    def delete_where(self, table: str, where: tuple | dict | list) -> int:
+    def delete_where(self, table: str, where: tuple | dict | list | None = None) -> int:
         table = self._validate_identifier(table, "table")
 
-        if not where:
-            raise ValueError("delete_where uchun where bo'sh bo'lmasligi kerak")
-
-        where_sql, where_params = self._build_where(where)
-        if not where_sql:
-            raise ValueError("WHERE sharti noto'g'ri")
-
-        sql = f"DELETE FROM {table} WHERE {where_sql}"
+        if where:
+            where_sql, where_params = self._build_where(where)
+            if where_sql:
+                sql = f"DELETE FROM {table} WHERE {where_sql}"
+            else:
+                sql = f"DELETE FROM {table}"
+                where_params = []
+        else:
+            sql = f"DELETE FROM {table}"
+            where_params = []
 
         in_transaction = getattr(self._local, "conn", None) is not None
         if in_transaction:
             conn = self._local.conn
         else:
             conn = self.pool.getconn()
-            conn.autocommit = True
 
         try:
             with conn.cursor() as cursor:
                 cursor.execute(sql, tuple(where_params))
                 affected_rows = cursor.rowcount
-                if not in_transaction:
+                if not in_transaction and not conn.autocommit:
                     conn.commit()
         finally:
             if not in_transaction:

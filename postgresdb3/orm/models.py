@@ -10,6 +10,13 @@ class Model(BaseModel, metaclass=ModelMeta):
     """
 
     @classmethod
+    def create_table(cls):
+        cls._check_setup()
+        cols = [field.to_sql() for field in cls._fields.values()]
+        sql = f"CREATE TABLE IF NOT EXISTS {cls.table} ({', '.join(cols)})"
+        return cls.db.raw(sql, commit=True)
+
+    @classmethod
     def query(cls):
         cls._check_setup()
         from .query import QuerySet
@@ -371,6 +378,13 @@ class AsyncModel(BaseModel, metaclass=ModelMeta):
     Asinxron muhit uchun ORM Model klassi.
     Sinxron Model bilan bir xil ishlaydi, faqat barcha metodlari (create, update, delete va hk) `await` bilan chaqirilishi kerak.
     """
+
+    @classmethod
+    async def create_table(cls):
+        cls._check_setup()
+        cols = [field.to_sql() for field in cls._fields.values()]
+        sql = f"CREATE TABLE IF NOT EXISTS {cls.table} ({', '.join(cols)})"
+        return await cls.db.raw(sql, commit=True)
 
     @classmethod
     def query(cls):

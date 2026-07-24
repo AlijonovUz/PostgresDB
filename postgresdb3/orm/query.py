@@ -1167,6 +1167,95 @@ class AsyncQuerySet:
 
         return instances
 
+    async def _process_prefetch(self, instances):
+        if hasattr(self, "_prefetch") and self._prefetch and instances:
+            for field_name in self._prefetch:
+                relation = getattr(self.model, field_name, None)
+                if not relation:
+                    continue
+
+                pk_name = self.model.get_pk_name()
+                instance_pks = [getattr(inst, pk_name) for inst in instances]
+
+                from postgresdb3.orm.relations import (
+                    ManyToManyRelation,
+                    AsyncReverseRelation,
+                    ForeignKeyRelation,
+                    AsyncForeignKeyRelation,
+                )
+
+                if isinstance(relation, ManyToManyRelation):
+                    target_model = relation.target_model
+                    through_table = relation.through_table
+                    source_col = relation.source_col
+                    target_col = relation.target_col
+
+                    placeholders = ", ".join(
+                        [f"${i+1}" for i in range(len(instance_pks))]
+                    )
+                    sql = f"SELECT {source_col}, {target_col} FROM {through_table} WHERE {source_col} IN ({placeholders})"
+
+                    mapping_records = await self.model.db._manager(
+                        sql, *instance_pks, fetchall=True
+                    )
+
+                    mapping_dict = {}
+                    target_ids = set()
+                    for r in mapping_records:
+                        s_id, t_id = r[source_col], r[target_col]
+                        if s_id not in mapping_dict:
+                            mapping_dict[s_id] = []
+                        mapping_dict[s_id].append(t_id)
+                        target_ids.add(t_id)
+
+                    if target_ids:
+                        target_instances = await target_model.filter(
+                            **{f"{target_model.get_pk_name()}__in": list(target_ids)}
+                        ).all()
+                        target_map = {
+                            getattr(t, target_model.get_pk_name()): t
+                            for t in target_instances
+                        }
+
+                        for inst in instances:
+                            pk = getattr(inst, pk_name)
+                            prefetched = [
+                                target_map[t_id]
+                                for t_id in mapping_dict.get(pk, [])
+                                if t_id in target_map
+                            ]
+                            setattr(inst, f"_prefetched_{field_name}", prefetched)
+
+                elif isinstance(relation, AsyncReverseRelation):
+                    related_model = relation.related_model
+                    fk_name = relation.fk_name
+
+                    related_instances = await related_model.filter(
+                        **{f"{fk_name}__in": instance_pks}
+                    ).all()
+
+                    for inst in instances:
+                        pk = getattr(inst, pk_name)
+                        prefetched = [
+                            r for r in related_instances if getattr(r, fk_name) == pk
+                        ]
+                        setattr(inst, f"_prefetched_{field_name}", prefetched)
+
+                elif isinstance(relation, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                    related_model = relation.related_model
+                    fk_col = relation.field_name
+                    fk_vals = list({getattr(inst, fk_col) for inst in instances if getattr(inst, fk_col, None) is not None})
+                    if fk_vals:
+                        to_field = relation.to_field
+                        related_instances = await related_model.filter(**{f"{to_field}__in": fk_vals}).all()
+                        related_map = {getattr(r, to_field): r for r in related_instances}
+                        for inst in instances:
+                            fk_val = getattr(inst, fk_col, None)
+                            if fk_val in related_map:
+                                setattr(inst, f"_prefetched_{field_name}", related_map[fk_val])
+
+        return instances
+
     def select_related(self, *fields):
         """
         N+1 muammosini oldini olish uchun yozilgan asinxron metod.

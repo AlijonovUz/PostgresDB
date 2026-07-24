@@ -17,17 +17,18 @@ class AsyncPostgresDB:
 
     def __init__(
         self,
-        database: str,
-        user: str,
-        password: str,
+        database: str = None,
+        user: str = None,
+        password: str = None,
         host: str = "localhost",
         port: int = 5432,
         min_size: int = 1,
         max_size: int = 20,
         echo: bool = False,
         slow_query_threshold: float = 500.0,
+        dbname: str = None,
     ) -> None:
-        self.database = database
+        self.database = database or dbname
         self.user = user
         self.password = password
         self.host = host
@@ -144,6 +145,9 @@ class AsyncPostgresDB:
             if not is_transaction and conn is not None and self.pool is not None:
                 await self.pool.release(conn)
 
+    async def execute(self, sql: str, *params) -> Any:
+        return await self.raw(sql, *params, commit=True)
+
     async def raw(
         self,
         sql: str,
@@ -161,6 +165,25 @@ class AsyncPostgresDB:
             fetchone=fetchone,
             fetchall=fetchall,
         )
+
+    async def connect(self):
+        if not self.pool:
+            if self._pool_lock is None:
+                self._pool_lock = asyncio.Lock()
+            async with self._pool_lock:
+                if not self.pool:
+                    self.pool = await asyncpg.create_pool(
+                        database=self.database,
+                        user=self.user,
+                        password=self.password,
+                        host=self.host,
+                        port=self.port,
+                        min_size=self.min_size,
+                        max_size=self.max_size,
+                    )
+
+    async def close(self):
+        await self.close_pool()
 
     async def close_pool(self) -> None:
         if self.pool:
@@ -183,9 +206,13 @@ class AsyncPostgresDB:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} bo'sh bo'lmasligi kerak")
 
-        cleaned = value.replace("_", "").replace(".", "")
-        if not cleaned.isalnum():
-            raise ValueError(f"Invalid {name}: {value}")
+        parts = value.split()
+        for part in parts:
+            if part.upper() in ("AS", "ASC", "DESC", "DISTINCT", "ON"):
+                continue
+            cleaned = part.replace("_", "").replace(".", "").replace('"', "").replace("'", "")
+            if not cleaned.isalnum() and cleaned != "*":
+                raise ValueError(f"Invalid {name}: {value}")
 
         return value
 
@@ -494,15 +521,12 @@ class AsyncPostgresDB:
         return int(result.split()[-1])
 
     async def update_where(
-        self, table: str, data: dict, where: tuple | dict | list
+        self, table: str, data: dict, where: tuple | dict | list | None = None
     ) -> int:
         table = self._validate_identifier(table, "table")
 
         if not data:
             raise ValueError("Yangilash uchun data bo'sh bo'lmasligi kerak")
-
-        if not where:
-            raise ValueError("update_where uchun where bo'sh bo'lmasligi kerak")
 
         set_parts = []
         params = []
@@ -518,36 +542,38 @@ class AsyncPostgresDB:
                 params.append(value)
             index += 1
 
-        where_sql, where_params = self._build_where(where, start_index=index)
+        if where:
+            where_sql, where_params = self._build_where(where, start_index=index)
+            if where_sql:
+                sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
+                params.extend(where_params)
+            else:
+                sql = f"UPDATE {table} SET {', '.join(set_parts)}"
+        else:
+            sql = f"UPDATE {table} SET {', '.join(set_parts)}"
 
-        if not where_sql:
-            raise ValueError("WHERE sharti noto'g'ri")
-
-        sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {where_sql}"
-
-        result = await self._manager(sql, *(params + where_params), commit=True)
-
+        result = await self._manager(sql, *params, commit=True)
         return int(result.split()[-1])
 
     async def delete(self, table: str, where_column: str, where_value: Any) -> None:
         sql = f"DELETE FROM {table} WHERE {where_column} = $1"
         await self._manager(sql, where_value, commit=True)
 
-    async def delete_where(self, table: str, where: tuple | dict | list) -> int:
+    async def delete_where(self, table: str, where: tuple | dict | list | None = None) -> int:
         table = self._validate_identifier(table, "table")
 
-        if not where:
-            raise ValueError("delete_where uchun where bo'sh bo'lmasligi kerak")
-
-        where_sql, where_params = self._build_where(where, start_index=1)
-
-        if not where_sql:
-            raise ValueError("WHERE sharti noto'g'ri")
-
-        sql = f"DELETE FROM {table} WHERE {where_sql}"
+        if where:
+            where_sql, where_params = self._build_where(where, start_index=1)
+            if where_sql:
+                sql = f"DELETE FROM {table} WHERE {where_sql}"
+            else:
+                sql = f"DELETE FROM {table}"
+                where_params = []
+        else:
+            sql = f"DELETE FROM {table}"
+            where_params = []
 
         result = await self._manager(sql, *where_params, commit=True)
-
         return int(result.split()[-1])
 
     async def exists_where(

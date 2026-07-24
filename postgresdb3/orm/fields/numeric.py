@@ -31,7 +31,11 @@ class BigSerial(Field):
 
 class Decimal(Field):
 
-    def __init__(self, verbose_name=None, precision=10, scale=2, **kwargs):
+    def __init__(self, verbose_name=None, precision=10, scale=2, max_digits=None, decimal_places=None, **kwargs):
+        if max_digits is not None:
+            precision = max_digits
+        if decimal_places is not None:
+            scale = decimal_places
         if isinstance(verbose_name, int):
             scale = precision
             precision = verbose_name

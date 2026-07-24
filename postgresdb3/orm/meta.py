@@ -254,11 +254,14 @@ class ModelMeta(type):
                         meta_options[key] = val
 
         if meta_class:
-            table_name = getattr(meta_class, "table_name", None) or getattr(
-                meta_class, "db_table", None
+            table_name = (
+                getattr(meta_class, "table", None)
+                or getattr(meta_class, "table_name", None)
+                or getattr(meta_class, "db_table", None)
             )
             if table_name:
                 attrs["table"] = table_name
+                meta_options["table"] = table_name
 
             if hasattr(meta_class, "unique_together"):
                 meta_options["unique_together"] = meta_class.unique_together
