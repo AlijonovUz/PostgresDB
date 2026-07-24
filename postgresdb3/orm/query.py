@@ -165,17 +165,38 @@ class QuerySet:
             columns = self._columns
         elif self._select_related:
             cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
+            from postgresdb3.orm.relations import (
+                ForeignKeyRelation,
+                AsyncForeignKeyRelation,
+            )
             for rel_str in self._select_related:
                 parts = rel_str.split("__")
                 curr_model = self.model
                 curr_alias = self.model.table
                 for p in parts:
-                    rel_attr = getattr(curr_model, p, None)
-                    if rel_attr and hasattr(rel_attr, "related_model"):
-                        curr_model = rel_attr.related_model
-                        curr_alias = f"{curr_alias}__{p}" if curr_alias != self.model.table else curr_model.table
+                    if p.endswith("_id") and hasattr(curr_model, p[:-3]):
+                        rel_name = p[:-3]
+                        possible_attr = getattr(curr_model, rel_name, None)
+                        if isinstance(possible_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                            db_col = possible_attr.field_name
+                            field = curr_model._fields.get(db_col)
+                        else:
+                            field = curr_model._fields.get(p)
                     else:
+                        rel_attr = getattr(curr_model, p, None)
+                        rel_name = p
+                        if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                            db_col = rel_attr.field_name
+                            field = curr_model._fields.get(db_col)
+                        else:
+                            field = curr_model._fields.get(p)
+
+                    if not field or not hasattr(field, "to"):
                         break
+
+                    curr_model = field.to
+                    curr_alias = f"{curr_alias}__{rel_name}"
+
                 if curr_model != self.model:
                     for rf in curr_model._fields.keys():
                         cols.append(f"{curr_alias}.{rf} AS __rel__{rel_str}__{rf}")
@@ -225,9 +246,11 @@ class QuerySet:
 
                     parts = rel_str.split("__")
                     parent_path = "__".join(parts[:-1])
-                    current_field = parts[-1]
-
                     parent_inst = hydrated_map.get(parent_path)
+                    current_field = parts[-1]
+                    if parent_inst and current_field.endswith("_id") and hasattr(parent_inst.__class__, current_field[:-3]):
+                        current_field = current_field[:-3]
+
                     if parent_inst:
                         rel_attr = getattr(parent_inst.__class__, current_field, None)
                         if rel_attr and hasattr(rel_attr, "related_model"):
@@ -271,21 +294,24 @@ class QuerySet:
             rel_path = []
 
             for part in parts:
-                rel_attr = getattr(curr_model, part, None)
-                rel_name = part
-                if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                    db_col = rel_attr.field_name
-                    field = curr_model._fields.get(db_col)
+                if part.endswith("_id") and hasattr(curr_model, part[:-3]):
+                    rel_name = part[:-3]
+                    possible_attr = getattr(curr_model, rel_name, None)
+                    if isinstance(possible_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        db_col = possible_attr.field_name
+                        field = curr_model._fields.get(db_col)
+                    else:
+                        db_col = part
+                        field = curr_model._fields.get(part)
                 else:
-                    field = curr_model._fields.get(part)
-                    db_col = part
-                    if not field and part.endswith("_id"):
-                        possible_rel = part[:-3]
-                        rel_attr = getattr(curr_model, possible_rel, None)
-                        if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                            rel_name = possible_rel
-                            db_col = rel_attr.field_name
-                            field = curr_model._fields.get(db_col)
+                    rel_attr = getattr(curr_model, part, None)
+                    rel_name = part
+                    if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        db_col = rel_attr.field_name
+                        field = curr_model._fields.get(db_col)
+                    else:
+                        field = curr_model._fields.get(part)
+                        db_col = part
 
                 if not field or not hasattr(field, "to"):
                     raise ValueError(
@@ -302,8 +328,8 @@ class QuerySet:
                 rel_path.append(rel_name)
                 current_rel_str = "__".join(rel_path)
 
-                join_alias = f"{curr_table_alias}__{rel_name}" if curr_table_alias != self.model.table else target_table
-                join_table_expr = f"{target_table} AS {join_alias}" if join_alias != target_table else target_table
+                join_alias = f"{curr_table_alias}__{rel_name}"
+                join_table_expr = f"{target_table} AS {join_alias}"
 
                 on_condition = f"{curr_table_alias}.{db_col} = {join_alias}.{target_model.get_pk_name()}"
                 if not any(j[1] == join_table_expr for j in qs._join):
@@ -1085,17 +1111,38 @@ class AsyncQuerySet:
             columns = self._columns
         elif self._select_related:
             cols = [f"{self.model.table}.{f} AS {f}" for f in self.model._fields.keys()]
+            from postgresdb3.orm.relations import (
+                ForeignKeyRelation,
+                AsyncForeignKeyRelation,
+            )
             for rel_str in self._select_related:
                 parts = rel_str.split("__")
                 curr_model = self.model
                 curr_alias = self.model.table
                 for p in parts:
-                    rel_attr = getattr(curr_model, p, None)
-                    if rel_attr and hasattr(rel_attr, "related_model"):
-                        curr_model = rel_attr.related_model
-                        curr_alias = f"{curr_alias}__{p}" if curr_alias != self.model.table else curr_model.table
+                    if p.endswith("_id") and hasattr(curr_model, p[:-3]):
+                        rel_name = p[:-3]
+                        possible_attr = getattr(curr_model, rel_name, None)
+                        if isinstance(possible_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                            db_col = possible_attr.field_name
+                            field = curr_model._fields.get(db_col)
+                        else:
+                            field = curr_model._fields.get(p)
                     else:
+                        rel_attr = getattr(curr_model, p, None)
+                        rel_name = p
+                        if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                            db_col = rel_attr.field_name
+                            field = curr_model._fields.get(db_col)
+                        else:
+                            field = curr_model._fields.get(p)
+
+                    if not field or not hasattr(field, "to"):
                         break
+
+                    curr_model = field.to
+                    curr_alias = f"{curr_alias}__{rel_name}"
+
                 if curr_model != self.model:
                     for rf in curr_model._fields.keys():
                         cols.append(f"{curr_alias}.{rf} AS __rel__{rel_str}__{rf}")
@@ -1145,9 +1192,11 @@ class AsyncQuerySet:
 
                     parts = rel_str.split("__")
                     parent_path = "__".join(parts[:-1])
-                    current_field = parts[-1]
-
                     parent_inst = hydrated_map.get(parent_path)
+                    current_field = parts[-1]
+                    if parent_inst and current_field.endswith("_id") and hasattr(parent_inst.__class__, current_field[:-3]):
+                        current_field = current_field[:-3]
+
                     if parent_inst:
                         rel_attr = getattr(parent_inst.__class__, current_field, None)
                         if rel_attr and hasattr(rel_attr, "related_model"):
@@ -1280,21 +1329,24 @@ class AsyncQuerySet:
             rel_path = []
 
             for part in parts:
-                rel_attr = getattr(curr_model, part, None)
-                rel_name = part
-                if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                    db_col = rel_attr.field_name
-                    field = curr_model._fields.get(db_col)
+                if part.endswith("_id") and hasattr(curr_model, part[:-3]):
+                    rel_name = part[:-3]
+                    possible_attr = getattr(curr_model, rel_name, None)
+                    if isinstance(possible_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        db_col = possible_attr.field_name
+                        field = curr_model._fields.get(db_col)
+                    else:
+                        db_col = part
+                        field = curr_model._fields.get(part)
                 else:
-                    field = curr_model._fields.get(part)
-                    db_col = part
-                    if not field and part.endswith("_id"):
-                        possible_rel = part[:-3]
-                        rel_attr = getattr(curr_model, possible_rel, None)
-                        if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
-                            rel_name = possible_rel
-                            db_col = rel_attr.field_name
-                            field = curr_model._fields.get(db_col)
+                    rel_attr = getattr(curr_model, part, None)
+                    rel_name = part
+                    if isinstance(rel_attr, (ForeignKeyRelation, AsyncForeignKeyRelation)):
+                        db_col = rel_attr.field_name
+                        field = curr_model._fields.get(db_col)
+                    else:
+                        field = curr_model._fields.get(part)
+                        db_col = part
 
                 if not field or not hasattr(field, "to"):
                     raise ValueError(
@@ -1311,8 +1363,8 @@ class AsyncQuerySet:
                 rel_path.append(rel_name)
                 current_rel_str = "__".join(rel_path)
 
-                join_alias = f"{curr_table_alias}__{rel_name}" if curr_table_alias != self.model.table else target_table
-                join_table_expr = f"{target_table} AS {join_alias}" if join_alias != target_table else target_table
+                join_alias = f"{curr_table_alias}__{rel_name}"
+                join_table_expr = f"{target_table} AS {join_alias}"
 
                 on_condition = f"{curr_table_alias}.{db_col} = {join_alias}.{target_model.get_pk_name()}"
                 if not any(j[1] == join_table_expr for j in qs._join):

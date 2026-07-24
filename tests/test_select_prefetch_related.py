@@ -26,12 +26,12 @@ class TestSelectAndPrefetchRelated(unittest.TestCase):
         # Test select_related with 'category' (relation descriptor name)
         qs1 = Product.filter().select_related("category")
         self.assertTrue(any("LEFT JOIN category" in j[0] + " " + j[1] for j in qs1._join))
-        self.assertTrue(any("product.category_id = category.id" in j[2] for j in qs1._join))
+        self.assertTrue(any("product.category_id = product__category.id" in j[2] for j in qs1._join))
 
         # Test select_related with 'category_id' (db column name)
         qs2 = Product.filter().select_related("category_id")
         self.assertTrue(any("LEFT JOIN category" in j[0] + " " + j[1] for j in qs2._join))
-        self.assertTrue(any("product.category_id = category.id" in j[2] for j in qs2._join))
+        self.assertTrue(any("product.category_id = product__category.id" in j[2] for j in qs2._join))
 
         # Test prefetch_related with both names
         qs3 = Product.filter().prefetch_related("category")
@@ -53,12 +53,12 @@ class TestSelectAndPrefetchRelated(unittest.TestCase):
         # Test select_related with 'category' on AsyncModel / AsyncQuerySet
         qs1 = AsyncProduct.query().select_related("category")
         self.assertTrue(any("LEFT JOIN async_category" in j[0] + " " + j[1] for j in qs1._join))
-        self.assertTrue(any("async_product.category_id = async_category.id" in j[2] for j in qs1._join))
+        self.assertTrue(any("async_product.category_id = async_product__category.id" in j[2] for j in qs1._join))
 
         # Test select_related with 'category_id' on AsyncModel / AsyncQuerySet
         qs2 = AsyncProduct.query().select_related("category_id")
         self.assertTrue(any("LEFT JOIN async_category" in j[0] + " " + j[1] for j in qs2._join))
-        self.assertTrue(any("async_product.category_id = async_category.id" in j[2] for j in qs2._join))
+        self.assertTrue(any("async_product.category_id = async_product__category.id" in j[2] for j in qs2._join))
 
     def test_ordering_prefix(self):
         class OrderItem(Model):

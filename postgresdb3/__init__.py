@@ -26,7 +26,7 @@ from .exceptions import (
 )
 from .cli import execute_from_command_line
 
-__version__ = "3.1.7"
+__version__ = "3.1.8"
 
 __all__ = [
     "PostgresDB",
