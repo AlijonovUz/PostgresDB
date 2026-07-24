@@ -1,0 +1,45 @@
+import unittest
+from unittest.mock import MagicMock
+from postgresdb3.orm import Model, AsyncModel, fields
+from postgresdb3.orm.meta import model_registry
+
+
+class TestSelectAndPrefetchRelated(unittest.TestCase):
+    def setUp(self):
+        model_registry.clear()
+        Model.db = MagicMock()
+
+    def test_select_and_prefetch_related_both_names(self):
+        class Category(Model):
+            id = fields.Serial(primary_key=True)
+            name = fields.String(length=50)
+
+        class Product(Model):
+            id = fields.Serial(primary_key=True)
+            category = fields.ForeignKey(Category, on_delete=fields.CASCADE)
+            title = fields.String(length=100)
+
+        # Product._fields must have 'category_id'
+        self.assertIn("category_id", Product._fields)
+        self.assertNotIn("category", Product._fields)
+
+        # Test select_related with 'category' (relation descriptor name)
+        qs1 = Product.filter().select_related("category")
+        self.assertTrue(any("LEFT JOIN category" in j[0] + " " + j[1] for j in qs1._join))
+        self.assertTrue(any("product.category_id = category.id" in j[2] for j in qs1._join))
+
+        # Test select_related with 'category_id' (db column name)
+        qs2 = Product.filter().select_related("category_id")
+        self.assertTrue(any("LEFT JOIN category" in j[0] + " " + j[1] for j in qs2._join))
+        self.assertTrue(any("product.category_id = category.id" in j[2] for j in qs2._join))
+
+        # Test prefetch_related with both names
+        qs3 = Product.filter().prefetch_related("category")
+        self.assertIn("category", qs3._prefetch)
+
+        qs4 = Product.filter().prefetch_related("category_id")
+        self.assertIn("category", qs4._prefetch)
+
+
+if __name__ == "__main__":
+    unittest.main()
