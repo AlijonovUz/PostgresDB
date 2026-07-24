@@ -1395,6 +1395,166 @@ class AsyncQuerySet:
 
         return qs
 
+    def _normalize_q(self, q):
+        if not q:
+            return q
+        from postgresdb3.orm.expressions import Q
+
+        if isinstance(q, Q):
+            if q.conditions:
+                q.conditions = self._process_auto_joins(q.conditions)
+            if q.children:
+                for i, child in enumerate(q.children):
+                    q.children[i] = self._normalize_q(child)
+        return q
+
+    def _process_auto_joins(self, kwargs):
+        new_kwargs = {}
+        from postgresdb3.orm.relations import (
+            ForeignKeyRelation,
+            AsyncForeignKeyRelation,
+        )
+        from postgresdb3.orm.base import BaseModel
+
+        def extract_pk(val):
+            if isinstance(val, BaseModel):
+                return getattr(val, val.get_pk_name())
+            return val
+
+        for key, value in kwargs.items():
+            if isinstance(value, (list, tuple)):
+                value = [extract_pk(v) for v in value]
+            else:
+                value = extract_pk(value)
+
+            parts = key.split("__")
+            field_name = parts[0]
+
+            relation = getattr(self.model, field_name, None)
+            is_fk_relation = relation and isinstance(
+                relation, (ForeignKeyRelation, AsyncForeignKeyRelation)
+            )
+
+            is_fk_comparison = False
+            if is_fk_relation:
+                if len(parts) == 1:
+                    is_fk_comparison = True
+                elif len(parts) == 2:
+                    lookup_ops = {
+                        "eq",
+                        "ne",
+                        "not",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "like",
+                        "ilike",
+                        "contains",
+                        "icontains",
+                        "startswith",
+                        "istartswith",
+                        "endswith",
+                        "iendswith",
+                        "in",
+                        "not_in",
+                        "isnull",
+                    }
+                    if parts[1] in lookup_ops:
+                        is_fk_comparison = True
+
+            if is_fk_comparison:
+                parts[0] = relation.field_name
+                key = "__".join(parts)
+
+            elif len(parts) >= 2:
+                if relation and hasattr(relation, "related_model"):
+                    target_table = relation.related_model.table
+                    source_col = getattr(relation, "field_name", field_name)
+                    target_col = relation.related_model.get_pk_name()
+
+                    join_condition = (
+                        f"{self.model.table}.{source_col} = {target_table}.{target_col}"
+                    )
+
+                    if not self._join:
+                        self._join = []
+
+                    join_exists = any(
+                        j[1] == target_table and j[2] == join_condition
+                        for j in self._join
+                        if isinstance(j, tuple) and len(j) == 3
+                    )
+
+                    if not join_exists:
+                        self._join.append(("INNER JOIN", target_table, join_condition))
+
+                    new_key = f"{target_table}.{'__'.join(parts[1:])}"
+                    new_kwargs[new_key] = value
+                    continue
+
+            new_kwargs[key] = value
+
+        return new_kwargs
+
+    def filter(self, *args, **kwargs):
+        qs = self._clone()
+
+        if qs._where is None:
+            qs._where = []
+
+        if not isinstance(qs._where, list):
+            qs._where = [qs._where]
+
+        for arg in args:
+            qs._where.append(self._normalize_q(arg))
+
+        if kwargs:
+            qs._where.append(self._process_auto_joins(kwargs))
+
+        return qs
+
+    def exclude(self, *args, **kwargs):
+        qs = self._clone()
+
+        if qs._exclude is None:
+            qs._exclude = []
+
+        if not isinstance(qs._exclude, list):
+            qs._exclude = [qs._exclude]
+
+        for arg in args:
+            qs._exclude.append(self._normalize_q(arg))
+
+        if kwargs:
+            qs._exclude.append(self._process_auto_joins(kwargs))
+        return qs
+
+    def order_by(self, value):
+        qs = self._clone()
+        qs._order_by = value
+        return qs
+
+    def limit(self, value):
+        qs = self._clone()
+        qs._limit = value
+        return qs
+
+    def offset(self, value):
+        qs = self._clone()
+        qs._offset = value
+        return qs
+
+    def columns(self, value):
+        qs = self._clone()
+        qs._columns = value
+        return qs
+
+    def join(self, value):
+        qs = self._clone()
+        qs._join = value
+        return qs
+
     def group_by(self, value):
         qs = self._clone()
         qs._group_by = value
@@ -1415,6 +1575,7 @@ class AsyncQuerySet:
         qs._flat = flat
         return qs
 
+    def only(self, *fields):
         """
         Faqat ko'rsatilgan ustunlarni yuklaydi (Asinxron). Model obyektlari qaytariladi.
         """
